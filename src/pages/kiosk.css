@@ -233,3 +233,41 @@ code{ background:#f3f4f6; padding:2px 6px; border-radius:6px }
     position:absolute; top:6px; right:8px; border:none; background:transparent;
     font-size:18px; line-height:1; padding:2px 4px; cursor:pointer; color:#6b7280;
 }
+
+/* ===== Index (Landing) ===== */
+.home-hero{
+    text-align:center; margin:48px 0 16px;
+}
+.home-title{
+    font-size: clamp(24px, 4vw, 36px);
+    font-weight: 900; letter-spacing:.2px; margin:0 0 6px 0;
+}
+.home-subtitle{
+    margin:0 auto; max-width:720px; color:var(--k-muted);
+}
+
+.home-continue{ margin:16px 0 24px; }
+.home-continue-row{
+    display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap;
+}
+.home-session{ font-weight:800; margin-top:2px; }
+.home-continue-actions{ display:flex; gap:10px; flex-wrap:wrap; }
+
+.home-roles{
+    display:grid; gap:16px;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    margin: 8px 0 24px;
+}
+.home-card{
+    border:1px solid var(--k-border); border-radius:16px; background:#fff; padding:16px;
+    box-shadow: var(--k-shadow-sm);
+    display:flex; flex-direction:column; gap:10px; min-height:180px;
+    transition: transform .06s ease, box-shadow .06s ease;
+}
+.home-card:hover{ transform: translateY(-1px); box-shadow: var(--k-shadow-md); }
+.home-card h2{ margin:0; font-weight:800; }
+.home-card-footer{ margin-top:auto; }
+
+.home-footer{
+    margin: 24px 0 8px; display:flex; justify-content:center;
+}

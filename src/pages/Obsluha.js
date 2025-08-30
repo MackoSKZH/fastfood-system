@@ -37,6 +37,13 @@ export default function Obsluha() {
   const [novyKodLoading, setNovyKodLoading] = useState(false);
   const [recentSessions, setRecentSessions] = useState([]);
 
+  const [showInfo, setShowInfo] = useState(false);
+  const [infoStats, setInfoStats] = useState({
+    perItem: [],
+    totalOrders: 0,
+    totalRevenue: 0,
+  });
+
   const mamAktivnyLock = useRef(false);
 
   useEffect(() => {
@@ -190,6 +197,33 @@ export default function Obsluha() {
     });
     return () => off();
   }, [session, toast]);
+
+  useEffect(() => {
+    if (!showInfo || !session) return;
+    const logRef = ref(db, `sessions/${session}/log`);
+    const off = onValue(logRef, (snap) => {
+      const data = snap.val() || {};
+      let totalOrders = 0;
+      let totalRevenue = 0;
+      const perItemMap = {};
+
+      Object.values(data).forEach((rec) => {
+        totalOrders += 1;
+        totalRevenue += Number(rec?.suma || 0);
+        const items = rec?.polozky || {};
+        Object.entries(items).forEach(([name, qty]) => {
+          perItemMap[name] = (perItemMap[name] || 0) + Number(qty || 0);
+        });
+      });
+
+      const perItem = Object.entries(perItemMap)
+        .map(([nazov, ks]) => ({ nazov, ks }))
+        .sort((a, b) => (b.ks - a.ks) || a.nazov.localeCompare(b.nazov, "sk"));
+
+      setInfoStats({ perItem, totalOrders, totalRevenue });
+    });
+    return () => off();
+  }, [showInfo, session]);
 
   async function vytvorSession() {
     try {
@@ -458,6 +492,7 @@ export default function Obsluha() {
       <div className="k-top">
         <div className="k-row" style={{ justifyContent: "space-between" }}>
           <div className="k-row">
+            <button className="k-btn" onClick={() => setShowInfo(true)}>Info</button>
             <button className="k-btn" onClick={goToPresety}>Presety</button>
             {vsetkyPresety.length ? (
               <select className="k-select" value={preset} onChange={(e)=>zmenitPreset(e.target.value)}>
@@ -610,6 +645,47 @@ export default function Obsluha() {
                 </div>
               </div>
             )}
+          </div>
+        </div>
+      )}
+      {showInfo && (
+        <div className="k-modal" role="dialog" aria-modal="true">
+          <div className="k-backdrop" onClick={() => setShowInfo(false)} />
+          <div className="k-sheet">
+            <div className="k-row" style={{justifyContent:"space-between"}}>
+              <h3 style={{margin:0}}>Prehľad predaja — session {session}</h3>
+              <button className="k-btn" onClick={() => setShowInfo(false)}>Zavrieť</button>
+            </div>
+
+            <div className="k-row" style={{marginTop:12}}>
+              <div className="k-badge">Dokončené objednávky: {infoStats.totalOrders}</div>
+              <div className="k-badge">Celková tržba: €{infoStats.totalRevenue.toFixed(2)}</div>
+            </div>
+
+            <div style={{marginTop:12}}>
+              {infoStats.perItem.length === 0 ? (
+                <p className="k-help">Zatiaľ žiadne dáta v logu.</p>
+              ) : (
+                <div className="k-scroll-x">
+                  <table className="k-table">
+                    <thead>
+                      <tr>
+                        <th>Položka</th>
+                        <th style={{width:120}}>Kusy</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {infoStats.perItem.map(({ nazov, ks }) => (
+                        <tr key={nazov}>
+                          <td>{nazov}</td>
+                          <td>{ks}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
           </div>
         </div>
       )}
