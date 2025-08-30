@@ -10,7 +10,6 @@ const firebaseConfig = {
     appId: process.env.REACT_APP_FIREBASE_APP_ID,
 };
 
-// rýchla validácia povinných premenných
 const required = {
     apiKey: "REACT_APP_FIREBASE_API_KEY",
     authDomain: "REACT_APP_FIREBASE_AUTH_DOMAIN",
