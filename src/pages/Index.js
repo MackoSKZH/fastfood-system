@@ -73,7 +73,7 @@ export default function Index() {
         </section>
 
         <footer className="home-footer">
-            <div className="k-help">© {new Date().getFullYear()} Fastfood System</div>
+            <div className="k-help">© {new Date().getFullYear()} Martin Hronský</div>
         </footer>
         </div>
     );
