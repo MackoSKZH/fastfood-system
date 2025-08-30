@@ -195,7 +195,7 @@ export default function Obsluha() {
         .join(", ");
       toast.success(
         `Vysielač #${vys} je pripravený na odovzdanie${summary ? ` — ${summary}` : ""}.`,
-        { duration: 5000 }
+        { duration: 15000 }
       );
     });
     return () => off();
