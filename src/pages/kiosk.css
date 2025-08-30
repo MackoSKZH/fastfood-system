@@ -1,0 +1,235 @@
+/* ---- Tokens ---- */
+:root{
+    /* colors */
+    --k-bg:#F8FAFC; --k-surface:#FFFFFF; --k-border:#E5E7EB;
+    --k-text:#111827; --k-muted:#6B7280;
+    --k-primary:#FFC72C; --k-primary-text:#1F2937; /* žltá */
+    --k-accent:#DA291C;  /* červená */
+    --k-success:#16A34A; --k-danger:#DC2626; --k-warn:#D97706;
+
+  /* layout */
+    --k-radius:12px;          /* default radius */
+    --k-radius-lg:16px;       /* panel/card */
+    --k-gap:12px;             /* default gap */
+    --k-pad:12px;             /* default padding */
+
+  /* effects */
+    --k-shadow-sm:0 1px 4px rgba(0,0,0,.06);
+    --k-shadow-md:0 6px 18px rgba(0,0,0,.08);
+    --k-focus:0 0 0 3px rgba(37,99,235,.22); /* modrý focus ring */
+}
+
+/* ---- Base ---- */
+*{ box-sizing:border-box }
+html,body{ height:100% }
+body{ background:var(--k-bg); color:var(--k-text); margin:0; font: 15px/1.45 system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial, "Noto Sans", "Apple Color Emoji","Segoe UI Emoji" }
+h1,h2,h3{ margin:0 0 8px 0 }
+code{ background:#f3f4f6; padding:2px 6px; border-radius:6px }
+
+/* lepšia prístupnosť pri klávesnici */
+:focus-visible{ outline:none; box-shadow:var(--k-focus) }
+
+/* ---- Layout ---- */
+.k-wrap{ max-width:1200px; margin:0 auto; padding:16px }
+.k-top{
+    position:sticky; top:0; z-index:10;
+    background:rgba(255,255,255,.95); backdrop-filter:saturate(1.1) blur(6px);
+    border-bottom:1px solid var(--k-border);
+    padding:8px 12px; margin:-16px -16px 16px -16px;
+}
+.k-row{ display:flex; gap:var(--k-gap); align-items:center; flex-wrap:wrap }
+.k-spacer{ flex:1 }
+
+.k-2col{ display:grid; grid-template-columns: 280px 1fr; gap:16px; align-items:start }
+@media (max-width: 900px){ .k-2col{ grid-template-columns:1fr } }
+
+/* ---- Controls ---- */
+.k-btn{
+    display:inline-flex; align-items:center; justify-content:center; gap:8px;
+    border:1px solid var(--k-border); background:#fff; border-radius:10px;
+    padding:10px 14px; cursor:pointer; font-weight:700;
+    transition:transform .06s ease, box-shadow .06s ease, opacity .2s ease;
+    box-shadow:var(--k-shadow-sm);
+}
+.k-btn:hover{ transform:translateY(-1px); box-shadow:var(--k-shadow-md) }
+.k-btn:disabled{ opacity:.55; cursor:not-allowed; transform:none; box-shadow:var(--k-shadow-sm) }
+.k-btn.primary{ background:var(--k-primary); color:var(--k-primary-text); border-color:#F4B400 }
+.k-btn.accent{ background:var(--k-accent); color:#fff; border-color:#b81f15 }
+.k-btn.ghost{ background:#f8f8f8 }
+.k-link{ color:#2563EB; text-decoration:underline; cursor:pointer }
+
+.k-badge{
+    background:var(--k-primary); color:var(--k-primary-text);
+    font-weight:800; padding:4px 10px; border-radius:999px
+}
+
+.k-input, .k-select{
+    border:1px solid var(--k-border); border-radius:10px;
+    padding:10px 12px; background:#fff; min-width:0;
+}
+.k-input:focus-visible, .k-select:focus-visible{ box-shadow:var(--k-focus) }
+
+/* ---- Panels ---- */
+.k-panel{
+    background:var(--k-surface); border:1px solid var(--k-border);
+    border-radius:var(--k-radius-lg); padding:var(--k-pad);
+    box-shadow:var(--k-shadow-sm);
+}
+.k-title{ margin:4px 0 12px 0 }
+
+/* ---- Obsluha: vysielače ---- */
+.k-vysielace{ display:grid; grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap:10px }
+.k-vys-btn{
+    aspect-ratio:1/1; border:2px solid var(--k-border); background:#fff; border-radius:16px;
+    font-size:20px; font-weight:800; cursor:pointer;
+    display:flex; align-items:center; justify-content:center; position:relative;
+    transition:transform .06s ease, box-shadow .06s ease, background-color .15s ease;
+    box-shadow:var(--k-shadow-sm);
+}
+.k-vys-btn:hover{ transform:translateY(-1px); box-shadow:var(--k-shadow-md) }
+.k-vys-btn.free{ border-color:#B2DF8A; background:#F0FFF4 }
+.k-vys-btn.locked{ border-color:#D1D5DB; color:#9CA3AF; background:#F9FAFB; cursor:not-allowed }
+.k-vys-btn .lock{ position:absolute; top:8px; right:8px; font-size:16px }
+
+/* ---- Obsluha: menu karty ---- */
+.k-menu{ display:grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap:12px }
+.k-card{
+    border:1px solid var(--k-border); border-radius:var(--k-radius-lg);
+    background:#fff; padding:10px; display:flex; flex-direction:column; gap:8px;
+    box-shadow:var(--k-shadow-sm);
+}
+.k-card .name{ font-weight:800 }
+.k-card .price{ color:var(--k-muted); font-variant-numeric:tabular-nums }
+.k-card .actions{ display:flex; gap:8px; align-items:center; margin-top:auto }
+.k-qty{
+    display:inline-flex; align-items:center; gap:8px;
+    border:1px solid var(--k-border); border-radius:999px; padding:4px 8px
+}
+
+/* ---- Košík ---- */
+.k-grid{ display:grid; grid-template-columns: 1fr 360px; gap:16px }
+@media (max-width: 1000px){ .k-grid{ grid-template-columns:1fr } }
+
+.k-cart{ position:sticky; top:72px; align-self:start }
+.k-cart .row{
+    display:flex; justify-content:space-between; align-items:center;
+    padding:6px 0; border-bottom:1px dashed var(--k-border)
+}
+.k-cart .sum{ font-size:20px; font-weight:900; font-variant-numeric:tabular-nums }
+.k-help{ font-size:12px; color:var(--k-muted) }
+
+/* ---- Modal (Info) ---- */
+.k-modal{ position:fixed; inset:0; z-index:100 }
+.k-backdrop{ position:absolute; inset:0; background:rgba(0,0,0,.4) }
+.k-sheet{
+    position:relative; margin:6vh auto; max-width:720px;
+    background:#fff; border:1px solid var(--k-border); border-radius:16px;
+    padding:16px; box-shadow:0 20px 60px rgba(0,0,0,.2)
+}
+
+/* ---- Tabuľky ---- */
+.k-scroll-x{ overflow-x:auto }
+.k-table{ width:100%; border-collapse:collapse }
+.k-table th, .k-table td{
+    padding:8px 6px; border-bottom:1px dashed var(--k-border); text-align:left
+}
+.k-table th{ font-weight:800 }
+
+/* ---- Presety (vertikálny zoznam vľavo) ---- */
+.k-aside{ align-self:start }
+.k-vlist{
+    display:flex; flex-direction:column; gap:8px;
+    max-height: calc(100vh - 240px); overflow:auto; -webkit-overflow-scrolling:touch
+}
+.k-preset-item{
+    display:flex; align-items:center; justify-content:space-between; gap:10px;
+    padding:10px 12px; border:1px solid var(--k-border); background:#fff;
+    border-radius:12px; cursor:pointer; user-select:none; box-shadow:var(--k-shadow-sm)
+}
+.k-preset-item .text{ flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
+.k-preset-item.active{ background:#e5f3ff; border-color:#cfe7ff; font-weight:800 }
+.k-preset-item.ghost{ background:#f8f8f8; border-style:dashed; justify-content:center }
+.k-preset-item.form{ gap:8px; cursor:default }
+.k-preset-actions{ display:flex; gap:6px }
+
+/* ---- Presety: mobilné vertikálne karty ---- */
+.k-vcards{ display:flex; flex-direction:column; gap:12px }
+.k-item-card{
+    width:100%; border:1px solid var(--k-border); border-radius:16px; background:#fff; padding:12px;
+    box-shadow:var(--k-shadow-sm)
+}
+.k-item-head{ display:flex; justify-content:space-between; align-items:baseline; gap:8px }
+.k-price{ color:var(--k-muted); font-variant-numeric:tabular-nums }
+
+/* ---- Responsive helpers ---- */
+@media (max-width: 1000px){ .hide-mobile{ display:none !important } }
+@media (min-width: 1001px){ .hide-desktop{ display:none !important } }
+
+/* ---- Motion preferences ---- */
+@media (prefers-reduced-motion: reduce){
+    .k-btn, .k-vys-btn{ transition:none }
+    .k-top{ backdrop-filter:none }
+}
+
+/* Malá rohová značka (napr. LOCK) namiesto emoji */
+.k-flag{
+    position:absolute; top:8px; right:8px;
+    padding:1px 6px; font-size:11px; line-height:1.6;
+    border-radius:999px; background:#E5E7EB; color:#374151;
+    border:1px solid #D1D5DB; font-weight:700; letter-spacing:.02em;
+}
+
+/* Konzistentné titulky bez emoji */
+.k-top h1, .k-title { font-weight: 800; letter-spacing: .2px; }
+
+/* Jemnejší vzhľad tlačidiel (menej "kričania") */
+.k-btn { font-weight: 600; }
+
+/* ===== Toasty ===== */
+.k-toast-container{
+    position: fixed; bottom: 16px; right: 16px; z-index: 200;
+    display: flex; flex-direction: column; gap: 8px; pointer-events: none;
+}
+.k-toast{
+    width: 320px; max-width: 92vw;
+    background: #fff; border: 1px solid var(--k-border);
+    border-radius: 12px; box-shadow: var(--k-shadow-md);
+    padding: 10px 12px 12px; position: relative; display: flex; gap: 10px;
+    pointer-events: auto; transform: translateY(0); opacity: 1;
+    transition: transform .18s ease, opacity .18s ease;
+}
+.k-toast.hide{ transform: translateY(6px); opacity: 0; }
+.k-toast-title{ font-weight: 700; margin-bottom: 2px; }
+.k-toast-msg{ color: var(--k-text); }
+.k-toast-x{
+    position: absolute; top: 6px; right: 8px; border: none; background: transparent;
+    font-size: 18px; line-height: 1; padding: 2px 4px; cursor: pointer; color: #6b7280;
+}
+.k-toast-progress{
+    position: absolute; left: 0; right: 0; bottom: 0; height: 3px; opacity: .45;
+    background: currentColor; animation: ktoast linear forwards;
+}
+@keyframes ktoast { from { transform: scaleX(1); transform-origin: left; } to { transform: scaleX(0); transform-origin: left; } }
+
+/* Varianty – decentné farby (biely podklad + farebný border vľavo) */
+.k-toast.info{ border-left: 4px solid #3b82f6; color:#1e3a8a; }
+.k-toast.success{ border-left: 4px solid var(--k-success); color:#065f46; }
+.k-toast.error{ border-left: 4px solid var(--k-danger); color:#7f1d1d; }
+.k-toast.warn{ border-left: 4px solid var(--k-warn); color:#92400e; }
+
+/* ===== Banner (inline) ===== */
+.k-banner{
+    display:flex; gap:10px; align-items:flex-start; position:relative;
+    border:1px solid var(--k-border); border-left-width:4px; border-radius:12px;
+    background:#fff; padding:10px 12px; box-shadow: var(--k-shadow-sm);
+}
+.k-banner.info{ border-left-color:#3b82f6; }
+.k-banner.success{ border-left-color:var(--k-success); }
+.k-banner.error{ border-left-color:var(--k-danger); }
+.k-banner.warn{ border-left-color:var(--k-warn); }
+.k-banner-title{ font-weight:700; margin-bottom:2px; }
+.k-banner-msg{ color: var(--k-text); }
+.k-banner-x{
+    position:absolute; top:6px; right:8px; border:none; background:transparent;
+    font-size:18px; line-height:1; padding:2px 4px; cursor:pointer; color:#6b7280;
+}
