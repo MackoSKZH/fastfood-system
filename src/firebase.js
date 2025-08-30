@@ -8,14 +8,19 @@ const firebaseConfig = {
     storageBucket: process.env.REACT_APP_FIREBASE_STORAGE_BUCKET,
     messagingSenderId: process.env.REACT_APP_FIREBASE_MESSAGING_SENDER_ID,
     appId: process.env.REACT_APP_FIREBASE_APP_ID,
-  // databaseURL: process.env.REACT_APP_FIREBASE_DATABASE_URL,
 };
 
-// jednoduchá kontrola, nech to pri builde hneď spadne ak niečo chýba
-for (const [k, v] of Object.entries(firebaseConfig)) {
-    if (v === undefined) {
-        throw new Error(`Missing env var for Firebase config: ${k}`);
-    }
+// rýchla validácia povinných premenných
+const required = {
+    apiKey: "REACT_APP_FIREBASE_API_KEY",
+    authDomain: "REACT_APP_FIREBASE_AUTH_DOMAIN",
+    projectId: "REACT_APP_FIREBASE_PROJECT_ID",
+    storageBucket: "REACT_APP_FIREBASE_STORAGE_BUCKET",
+    messagingSenderId: "REACT_APP_FIREBASE_MESSAGING_SENDER_ID",
+    appId: "REACT_APP_FIREBASE_APP_ID",
+};
+for (const [key, envName] of Object.entries(required)) {
+    if (!firebaseConfig[key]) throw new Error(`Missing env var ${envName}`);
 }
 
 const app = initializeApp(firebaseConfig);
