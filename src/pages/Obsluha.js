@@ -11,12 +11,12 @@ import {
   onChildAdded,
   query,
   orderByChild,
-  startAt
+  startAt,
 } from "firebase/database";
 import { useNavigate } from "react-router-dom";
+import { useToast } from "../ui/toast";
 
 import "./kiosk.css";
-import { useToast } from "../ui/toast";
 
 const vysielaceCisla = Array.from({ length: 24 }, (_, i) => i + 1);
 
@@ -33,44 +33,35 @@ export default function Obsluha() {
   const [zvolenyVysielac, setZvolenyVysielac] = useState(null);
   const [objednavka, setObjednavka] = useState({});
 
-  const [showInfo, setShowInfo] = useState(false);
-  const [stats, setStats] = useState({ totalOrders: 0, totalRevenue: 0, byItem: [], from: null, to: null });
+  const [showSessionModal, setShowSessionModal] = useState(false);
+  const [novyKodLoading, setNovyKodLoading] = useState(false);
+  const [recentSessions, setRecentSessions] = useState([]);
 
   const mamAktivnyLock = useRef(false);
-  const vysielacePanelRef = useRef(null);
 
   useEffect(() => {
-    if (!showInfo || !session) return;
-    const logRef = ref(db, `sessions/${session}/log`);
-    const off = onValue(logRef, (snap) => {
-      const data = snap.val() || {};
-      let totalOrders = 0;
-      let totalRevenue = 0;
-      const counts = {};
-      let from = null, to = null;
-
-      Object.values(data).forEach((rec) => {
-        totalOrders += 1;
-        totalRevenue += Number(rec?.suma || 0);
-        const t = Number(rec?.completedAt || rec?.timestamp || 0);
-        if (t) {
-          if (from === null || t < from) from = t;
-          if (to === null || t > to) to = t;
-        }
-        const pol = rec?.polozky || {};
-        Object.entries(pol).forEach(([nazov, ks]) => {
-          counts[nazov] = (counts[nazov] || 0) + Number(ks || 0);
-        });
-      });
-
-      const byItem = Object.entries(counts)
-        .map(([nazov, ks]) => ({ nazov, ks }))
-        .sort((a, b) => b.ks - a.ks);
-
-      setStats({ totalOrders, totalRevenue, byItem, from, to });
+    const raw = localStorage.getItem("recentSessions");
+    if (raw) {
+      try {
+        const arr = JSON.parse(raw);
+        if (Array.isArray(arr)) setRecentSessions(arr);
+      } catch {}
+    }
+  }, []);
+  function rememberSession(kod) {
+    setRecentSessions((prev) => {
+      const next = [kod, ...prev.filter((x) => x !== kod)].slice(0, 5);
+      localStorage.setItem("recentSessions", JSON.stringify(next));
+      return next;
     });
-    return () => off();
-  }, [showInfo, session]);
+  }
+  function forgetSession(kod) {
+    setRecentSessions((prev) => {
+      const next = prev.filter((x) => x !== kod);
+      localStorage.setItem("recentSessions", JSON.stringify(next));
+      return next;
+    });
+  }
 
   useEffect(() => {
     const presetsRef = ref(db, "presets");
@@ -127,6 +118,7 @@ export default function Obsluha() {
             setSession(ulozena);
             const data = snap.val();
             if (data && data.preset) setPreset(data.preset);
+            rememberSession(ulozena);
           } else {
             sessionStorage.removeItem("session");
           }
@@ -169,11 +161,9 @@ export default function Obsluha() {
         mamAktivnyLock.current = false;
       }
     };
-
-    const handleBeforeUnload = () => {};
-    window.addEventListener("beforeunload", handleBeforeUnload);
+    window.addEventListener("beforeunload", () => {});
     return () => {
-      window.removeEventListener("beforeunload", handleBeforeUnload);
+      window.removeEventListener("beforeunload", () => {});
       unlockIfNeeded();
     };
   }, [session, zvolenyVysielac]);
@@ -201,7 +191,6 @@ export default function Obsluha() {
     return () => off();
   }, [session, toast]);
 
-
   async function vytvorSession() {
     try {
       let kod;
@@ -217,6 +206,8 @@ export default function Obsluha() {
       });
       setSession(kod);
       sessionStorage.setItem("session", kod);
+      rememberSession(kod);
+      toast.success(`Vytvorená nová session ${kod}.`);
     } catch (err) {
       console.error("Chyba pri vytvorení session:", err);
       toast.error("Nepodarilo sa vytvoriť session. Skúste znova.");
@@ -238,10 +229,77 @@ export default function Obsluha() {
       setPreset((data && data.preset) || "");
       setSession(kod);
       sessionStorage.setItem("session", kod);
+      rememberSession(kod);
+      toast.success(`Pripojené k session ${kod}.`);
     } catch (err) {
       console.error("Chyba pri pripájaní:", err);
       toast.error("Nepodarilo sa pripojiť k session.");
     }
+  }
+
+  async function safeReleaseLock() {
+    if (!session || zvolenyVysielac == null) return;
+    const lockRef = ref(db, `sessions/${session}/vysielace/${zvolenyVysielac}`);
+    try {
+      try {
+        await onDisconnect(lockRef).cancel();
+      } catch {}
+      await set(lockRef, null);
+    } catch (e) {
+      console.error("Chyba pri uvoľnení vysielača:", e);
+    } finally {
+      mamAktivnyLock.current = false;
+      setZvolenyVysielac(null);
+      setObjednavka({});
+      sessionStorage.removeItem("zvolenyVysielac");
+    }
+  }
+
+  async function switchToSession(targetCode) {
+    if (!targetCode) return;
+    if (Object.keys(objednavka || {}).length > 0 || zvolenyVysielac != null) {
+      const ok = window.confirm(
+        "Zmeniť session? Rozpracovaná objednávka a prípadný zámok vysielača budú zrušené."
+      );
+      if (!ok) return;
+    }
+    await safeReleaseLock();
+    setShowSessionModal(false);
+    await pripojitSa(targetCode);
+  }
+
+  async function createAndSwitch() {
+    if (Object.keys(objednavka || {}).length > 0 || zvolenyVysielac != null) {
+      const ok = window.confirm(
+        "Vytvoriť novú session? Rozpracovaná objednávka a prípadný zámok vysielača budú zrušené."
+      );
+      if (!ok) return;
+    }
+    await safeReleaseLock();
+    setShowSessionModal(false);
+    setNovyKodLoading(true);
+    try {
+      await vytvorSession();
+    } finally {
+      setNovyKodLoading(false);
+    }
+  }
+
+  async function signOutSession() {
+    if (!session) return;
+    if (Object.keys(objednavka || {}).length > 0 || zvolenyVysielac != null) {
+      const ok = window.confirm(
+        "Odhlásiť zo session? Rozpracovaná objednávka a prípadný zámok vysielača budú zrušené."
+      );
+      if (!ok) return;
+    }
+    await safeReleaseLock();
+    setSession("");
+    setPreset("");
+    setMenu([]);
+    sessionStorage.removeItem("session");
+    sessionStorage.removeItem("preset");
+    toast.info("Odhlásené zo session.");
   }
 
   async function vybratVysielac(cislo) {
@@ -251,7 +309,9 @@ export default function Obsluha() {
       const res = await runTransaction(
         lockRef,
         (current) => {
-          if (current === true) return;
+          if (current === true) {
+            return;
+          }
           return true;
         },
         { applyLocally: false }
@@ -273,44 +333,24 @@ export default function Obsluha() {
   }
 
   async function spatKVysielacom() {
-    if (!session || zvolenyVysielac == null) return;
-    const lockRef = ref(db, `sessions/${session}/vysielace/${zvolenyVysielac}`);
-    try {
-      try { await onDisconnect(lockRef).cancel(); } catch {}
-      await set(lockRef, null);
-    } catch (e) {
-      console.error("Chyba pri odomykaní vysielača:", e);
-    } finally {
-      mamAktivnyLock.current = false;
-      setZvolenyVysielac(null);
-    }
+    await safeReleaseLock();
   }
 
   async function zrusitObjednavku() {
-    if (!session || zvolenyVysielac == null) {
-      setObjednavka({});
+    if (Object.keys(objednavka).length === 0) {
+      await safeReleaseLock();
       return;
     }
-    const potvrd = window.confirm("Naozaj zrušiť celú objednávku?");
-    if (!potvrd) return;
-
-    const lockRef = ref(db, `sessions/${session}/vysielace/${zvolenyVysielac}`);
-    try {
-      try { await onDisconnect(lockRef).cancel(); } catch {}
-      await set(lockRef, null);
-    } catch (e) {
-      console.error("Chyba pri odomykaní vysielača:", e);
-    } finally {
-      mamAktivnyLock.current = false;
-      setObjednavka({});
-      setZvolenyVysielac(null);
-    }
+    const ok = window.confirm("Zrušiť rozpracovanú objednávku?");
+    if (!ok) return;
+    setObjednavka({});
+    toast.info("Objednávka bola zrušená.");
   }
 
   function pridajPolozku(nazov) {
-    if (zvolenyVysielac == null) return;
     setObjednavka((prev) => ({ ...prev, [nazov]: (prev[nazov] || 0) + 1 }));
   }
+
   function odobratPolozku(nazov) {
     setObjednavka((prev) => {
       const k = { ...prev };
@@ -319,6 +359,7 @@ export default function Obsluha() {
       return k;
     });
   }
+
   function spocitajCenu() {
     return Object.entries(objednavka).reduce((sum, [nazov, pocet]) => {
       const p = menu.find((m) => m.nazov === nazov);
@@ -328,9 +369,18 @@ export default function Obsluha() {
 
   async function potvrditObjednavku() {
     try {
-      if (!session) return toast.warn("Nie ste v session.");
-      if (!zvolenyVysielac) return toast.warn("Najprv vyberte vysielač.");
-      if (Object.keys(objednavka).length === 0) return toast.info("Košík je prázdny.");
+      if (!session) {
+        toast.warn("Nie ste v session.");
+        return;
+      }
+      if (!zvolenyVysielac) {
+        toast.warn("Najprv vyberte vysielač.");
+        return;
+      }
+      if (Object.keys(objednavka).length === 0) {
+        toast.info("Košík je prázdny.");
+        return;
+      }
 
       const ordersRef = ref(db, `sessions/${session}/objednavky`);
       const newRef = push(ordersRef);
@@ -343,7 +393,13 @@ export default function Obsluha() {
       });
 
       const lockRef = ref(db, `sessions/${session}/vysielace/${zvolenyVysielac}`);
-      try { await onDisconnect(lockRef).cancel(); } catch {}
+
+      try {
+        await onDisconnect(lockRef).cancel();
+      } catch (e) {
+        console.warn("Nepodarilo sa cancelnúť onDisconnect locku:", e);
+      }
+
       await set(lockRef, true);
 
       toast.success("Objednávka bola potvrdená.");
@@ -371,84 +427,79 @@ export default function Obsluha() {
     sessionStorage.setItem("obsluhaScrollY", String(window.scrollY));
     navigate("/presety");
   }
-  function scrollNaVysielace() {
-    vysielacePanelRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-  }
 
-  // LOGIN obrazovka
+  // ===== UI =====
   if (!session) {
     return (
       <div style={{ padding: 20, maxWidth: 420 }}>
         <h2>Pripojenie k akcii (session)</h2>
 
         <div style={{ margin: "16px 0" }}>
-          <button onClick={vytvorSession}>Vytvoriť novú session</button>
+          <button className="k-btn" onClick={vytvorSession}>Vytvoriť novú session</button>
         </div>
 
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           <input
+            className="k-input"
             maxLength={4}
             value={kodInput}
-            onChange={(e) =>
-              setKodInput(e.target.value.replace(/\D/g, "").slice(0, 4))
-            }
-            placeholder="Zadaj existujúci kód (4 čísla)"
+            onChange={(e) => setKodInput(e.target.value.replace(/\D/g, "").slice(0, 4))}
+            placeholder="Zadajte existujúci kód (4 čísla)"
           />
-          <button onClick={() => pripojitSa(kodInput)}>Pripojiť sa</button>
+          <button className="k-btn" onClick={() => pripojitSa(kodInput)}>Pripojiť sa</button>
         </div>
       </div>
     );
   }
 
-  // Hlavné UI
   return (
     <div className="k-wrap">
       {/* TOP BAR */}
       <div className="k-top">
-        <div className="k-row" style={{justifyContent:"space-between"}}>
+        <div className="k-row" style={{ justifyContent: "space-between" }}>
           <div className="k-row">
-            <button className="k-btn" onClick={()=>setShowInfo(true)}>Info</button>
             <button className="k-btn" onClick={goToPresety}>Presety</button>
             {vsetkyPresety.length ? (
               <select className="k-select" value={preset} onChange={(e)=>zmenitPreset(e.target.value)}>
-                <option value="">-- Vyber preset --</option>
+                <option value="">— Vyberte preset —</option>
                 {vsetkyPresety.map(p=> <option key={p} value={p}>{p}</option>)}
               </select>
             ) : <span className="k-help">Žiadne presety</span>}
           </div>
 
           <div className="k-row">
-            {zvolenyVysielac != null && (
-              <button className="k-btn" onClick={spatKVysielacom}>Späť k vysielačom</button>
-            )}
-            <span className="k-badge">Session {session}</span>
+            <button className="k-btn" onClick={() => setShowSessionModal(true)}>
+              Session {session}
+            </button>
           </div>
         </div>
       </div>
 
-      {/* DVOJSTĹPCOVÝ LAYOUT: MENU + KOŠÍK */}
+      {/* GRID: MENU + KOŠÍK */}
       <div className="k-grid">
         <div className="k-col">
           {/* PANEL VYSIELAČOV */}
           {!zvolenyVysielac && (
-            <div className="k-panel" ref={vysielacePanelRef}>
+            <div className="k-panel">
               <h2 className="k-title">Zvoľte vysielač</h2>
               <div className="k-vysielace">
-                {vysielaceCisla.map(cislo=>{
+                {vysielaceCisla.map((cislo) => {
                   const locked = !!zablokovaneVysielace[cislo];
                   return (
-                    <button key={cislo}
-                            className={`k-vys-btn ${locked? "locked":"free"}`}
-                            disabled={locked}
-                            onClick={()=>vybratVysielac(cislo)}
-                            title={locked?"Zablokovaný":"Voľný"}>
+                    <button
+                      key={cislo}
+                      className={`k-vys-btn ${locked ? "locked" : "free"}`}
+                      disabled={locked}
+                      onClick={() => vybratVysielac(cislo)}
+                      title={locked ? "Zablokovaný" : "Voľný"}
+                    >
                       {cislo}
-                      {locked && <span className="lock">🔒</span>}
+                      {locked && <span className="k-flag">LOCK</span>}
                     </button>
-                  )
+                  );
                 })}
               </div>
-              <div className="k-help" style={{marginTop:8}}>
+              <div className="k-help" style={{ marginTop: 8 }}>
                 Najprv zvoľte vysielač. Potom sa zobrazí ponuka.
               </div>
             </div>
@@ -456,28 +507,28 @@ export default function Obsluha() {
 
           {/* MENU GRID */}
           {zvolenyVysielac && (
-            <div className="k-panel" style={{marginTop:12}}>
+            <div className="k-panel" style={{ marginTop: 12 }}>
               <h2 className="k-title">Vysielač #{zvolenyVysielac}</h2>
               <div className="k-menu">
-                {menu.length===0 && <i>Menu je prázdne.</i>}
-                {menu.map(p=>{
+                {menu.length === 0 && <i>Menu je prázdne.</i>}
+                {menu.map((p) => {
                   const count = objednavka[p.nazov] || 0;
                   return (
                     <div className="k-card" key={p.nazov}>
                       <div className="name">{p.nazov}</div>
                       <div className="price">€{p.cena.toFixed(2)}</div>
                       <div className="actions">
-                        <button className="k-btn primary" onClick={()=>pridajPolozku(p.nazov)}>+ Pridať</button>
-                        {count>0 && (
+                        <button className="k-btn primary" onClick={() => pridajPolozku(p.nazov)}>Pridať</button>
+                        {count > 0 && (
                           <div className="k-qty">
-                            <button className="k-btn" onClick={()=>odobratPolozku(p.nazov)} aria-label="Odobrať">–</button>
+                            <button className="k-btn" onClick={() => odobratPolozku(p.nazov)} aria-label="Odobrať">–</button>
                             <strong>{count}</strong>
-                            <button className="k-btn" onClick={()=>pridajPolozku(p.nazov)} aria-label="Pridať">+</button>
+                            <button className="k-btn" onClick={() => pridajPolozku(p.nazov)} aria-label="Pridať">+</button>
                           </div>
                         )}
                       </div>
                     </div>
-                  )
+                  );
                 })}
               </div>
             </div>
@@ -486,98 +537,79 @@ export default function Obsluha() {
 
         {/* STICKY KOŠÍK */}
         <aside className="k-panel k-cart">
-          <h3 style={{marginTop:0}}>Moja objednávka</h3>
-
-          {Object.keys(objednavka).length===0 ? (
-            <p className="k-help">
-              Žiadne položky. {zvolenyVysielac == null ? (
-                <>Najprv <button className="k-link" onClick={scrollNaVysielace}>vyber vysielač</button>.</>
-              ) : "Pridaj z menu."}
-            </p>
+          <h3 style={{ marginTop: 0 }}>Moja objednávka</h3>
+          {Object.keys(objednavka).length === 0 ? (
+            <p className="k-help">Žiadne položky. Pridajte z ponuky.</p>
           ) : (
             <>
               <div>
-                {Object.entries(objednavka).map(([nazov, pocet])=>{
-                  const pol = menu.find(m=>m.nazov===nazov);
-                  const cena = (pol?.cena||0) * pocet;
+                {Object.entries(objednavka).map(([nazov, pocet]) => {
+                  const pol = menu.find((m) => m.nazov === nazov);
+                  const cena = (pol?.cena || 0) * pocet;
                   return (
                     <div key={nazov} className="row">
-                      <div style={{maxWidth:220}}>
+                      <div style={{ maxWidth: 220 }}>
                         <strong>{nazov}</strong> <span className="k-help">×{pocet}</span>
                       </div>
                       <div>€{cena.toFixed(2)}</div>
                     </div>
-                  )
+                  );
                 })}
               </div>
-
-              <div className="row" style={{borderBottom:"none", paddingTop:10}}>
+              <div className="row" style={{ borderBottom: "none", paddingTop: 10 }}>
                 <div className="sum">Spolu</div>
                 <div className="sum">€{spocitajCenu().toFixed(2)}</div>
               </div>
 
-              <div className="k-row" style={{marginTop:12, flexWrap:"wrap"}}>
-                {zvolenyVysielac != null ? (
-                  <button className="k-btn" onClick={spatKVysielacom}>Späť k vysielačom</button>
-                ) : (
-                  <button className="k-btn" onClick={scrollNaVysielace}>Vybrať vysielač</button>
-                )}
+              <div className="k-row" style={{ marginTop: 12 }}>
+                <button className="k-btn" onClick={spatKVysielacom}>Späť k vysielačom</button>
                 <button className="k-btn" onClick={zrusitObjednavku}>Zrušiť objednávku</button>
-                <button
-                  className="k-btn accent"
-                  onClick={potvrditObjednavku}
-                  disabled={!zvolenyVysielac || Object.keys(objednavka).length===0}
-                  title={!zvolenyVysielac ? "Najprv vyber vysielač" : (Object.keys(objednavka).length===0 ? "Košík je prázdny" : "")}
-                >
-                  Potvrdiť
-                </button>
+                <button className="k-btn accent" onClick={potvrditObjednavku}>Potvrdiť objednávku</button>
               </div>
-
-              <div className="k-help">
-                Po potvrdení zostane daný vysielač zamknutý, kým kuchyňa objednávku neuzavrie.
-              </div>
+              <div className="k-help">Po potvrdení sa vysielač uzamkne.</div>
             </>
           )}
         </aside>
       </div>
 
-      {/* ℹ️ INFO MODAL */}
-      {showInfo && (
-        <div className="k-modal">
-          <div className="k-backdrop" onClick={()=>setShowInfo(false)} />
+      {/* Session switcher modal */}
+      {showSessionModal && (
+        <div className="k-modal" role="dialog" aria-modal="true">
+          <div className="k-backdrop" onClick={() => setShowSessionModal(false)} />
           <div className="k-sheet">
-            <div className="k-row" style={{justifyContent:"space-between"}}>
-              <h3 style={{margin:0}}>Prehľad predaja</h3>
-              <button className="k-btn" onClick={()=>setShowInfo(false)}>Zavrieť</button>
+            <h3 style={{ marginTop: 0 }}>Prepnutie session</h3>
+
+            <div className="k-row" style={{ marginTop: 10 }}>
+              <input
+                className="k-input"
+                maxLength={4}
+                value={kodInput}
+                onChange={(e) => setKodInput(e.target.value.replace(/\D/g, "").slice(0, 4))}
+                placeholder="Zadajte kód (4 čísla)"
+                style={{ width: 160 }}
+              />
+              <button className="k-btn" onClick={() => switchToSession(kodInput)}>Pripojiť</button>
+              <button className="k-btn" onClick={createAndSwitch} disabled={novyKodLoading}>
+                {novyKodLoading ? "Vytváram…" : "Vytvoriť novú a prepnúť"}
+              </button>
+              <span className="k-spacer" />
+              <button className="k-btn" onClick={signOutSession}>Odhlásiť zo session</button>
+              <button className="k-btn" onClick={() => setShowSessionModal(false)}>Zavrieť</button>
             </div>
-            <div className="k-help" style={{margin:"8px 0"}}>
-              Session {session}
-              {stats?.from && <> · {new Date(stats.from).toLocaleTimeString()} – {new Date(stats.to).toLocaleTimeString()}</>}
-            </div>
-            <div className="k-panel" style={{marginTop:8}}>
-              <div className="k-row" style={{justifyContent:"space-between"}}>
-                <div><strong>Objednávky:</strong> {stats?.totalOrders || 0}</div>
-                <div><strong>Tržba spolu:</strong> €{(stats?.totalRevenue || 0).toFixed(2)}</div>
-              </div>
-            </div>
-            <div style={{marginTop:12, maxHeight:"50vh", overflow:"auto"}}>
-              <table className="k-table">
-                <thead>
-                  <tr><th>Položka</th><th style={{textAlign:"right"}}>Predané ks</th></tr>
-                </thead>
-                <tbody>
-                  {(stats?.byItem || []).map(r=>(
-                    <tr key={r.nazov}>
-                      <td>{r.nazov}</td>
-                      <td style={{textAlign:"right"}}>{r.ks}</td>
-                    </tr>
+
+            {recentSessions.length > 0 && (
+              <div style={{ marginTop: 16 }}>
+                <div className="k-help" style={{ marginBottom: 6 }}>Naposledy použité:</div>
+                <div className="k-row" style={{ flexWrap: "wrap" }}>
+                  {recentSessions.map((k) => (
+                    <div key={k} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      <button className="k-btn" onClick={() => switchToSession(k)}>Session {k}</button>
+                      <button className="k-btn" onClick={() => forgetSession(k)} title="Odstrániť zo zoznamu">Odstrániť</button>
+                    </div>
                   ))}
-                  {(!stats?.byItem || stats.byItem.length===0) && (
-                    <tr><td colSpan={2} className="k-help">Zatiaľ žiadne dokončené objednávky.</td></tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
