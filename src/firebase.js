@@ -18,7 +18,7 @@ const required = {
     messagingSenderId: "REACT_APP_FIREBASE_MESSAGING_SENDER_ID",
     appId: "REACT_APP_FIREBASE_APP_ID",
 };
-for (const [key, envName] of Object.entries(required)) {
+for (const [key, envName] of Object.entries(firebaseConfig)) {
     if (!firebaseConfig[key]) {
         throw new Error(`Missing env var ${envName}`);
     }
