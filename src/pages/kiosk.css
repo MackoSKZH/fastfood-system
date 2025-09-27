@@ -171,7 +171,7 @@ code{ background:#f3f4f6; padding:2px 6px; border-radius:6px }
     .k-top{ backdrop-filter:none }
 }
 
-/* Malá rohová značka (napr. LOCK) namiesto emoji */
+/* Malá rohová značka (LOCK) namiesto emoji */
 .k-flag{
     position:absolute; top:8px; right:8px;
     padding:1px 6px; font-size:11px; line-height:1.6;
@@ -179,10 +179,10 @@ code{ background:#f3f4f6; padding:2px 6px; border-radius:6px }
     border:1px solid #D1D5DB; font-weight:700; letter-spacing:.02em;
 }
 
-/* Konzistentné titulky bez emoji */
+/* Konzistentné titulky*/
 .k-top h1, .k-title { font-weight: 800; letter-spacing: .2px; }
 
-/* Jemnejší vzhľad tlačidiel (menej "kričania") */
+/* Jemnejší vzhľad tlačidiel */
 .k-btn { font-weight: 600; }
 
 /* ===== Toasty ===== */
@@ -270,4 +270,466 @@ code{ background:#f3f4f6; padding:2px 6px; border-radius:6px }
 
 .home-footer{
     margin: 24px 0 8px; display:flex; justify-content:center;
+}
+
+/* ===== Kuchyňa (konzolidované) ===== */
+
+/* Zvýšené UI (väčšie písmo/checkboxy) */
+.k-kitchen-xl{ font-size: 18.5px; }
+.k-kitchen-xl input[type="checkbox"]{ width: 22px; height: 22px; }
+
+/* Karty objednávok */
+.k-order-card{ padding:16px; }
+.k-order-head strong{ font-size:28px; font-weight:900; }
+
+/* Odznak času */
+.k-order-timer{
+  font-weight:800;
+  padding:4px 10px;
+  border-radius:999px;
+  color:#fff;
+  display:inline-block;
+}
+
+/* ===== Kuchyňa (konzolidované) – FIX ===== */
+
+/* Zvýšené UI (väčšie písmo/checkboxy) */
+.k-kitchen-xl{ font-size: 18.5px; }
+.k-kitchen-xl input[type="checkbox"]{ width: 22px; height: 22px; }
+
+/* Karty objednávok */
+.k-order-card{ padding:16px; }
+.k-order-head strong{ font-size:28px; font-weight:900; }
+
+/* Odznak času */
+.k-order-timer{
+  font-weight:800;
+  padding:4px 10px;
+  border-radius:999px;
+  color:#fff;
+  display:inline-block;
+}
+
+/* Info tabuľka – o kus väčšie bunky pri XL */
+.k-kitchen-xl .k-table th,
+.k-kitchen-xl .k-table td{ padding:10px 8px; }
+
+/* ===== Fullscreen + škálovanie bez zalamovania ===== */
+.k-kitchen-screen{
+  position: fixed;
+  left: 0; top: 0;
+  width: 100vw;  /* fallback */
+  height: 100vh; /* fallback */
+  background: var(--k-bg);
+  overflow: hidden;
+}
+
+/* iOS/Safari fix – dynamické viewport jednotky, ak sú */
+@supports (height: 100dvh) {
+  .k-kitchen-screen{
+    width: 100dvw;
+    height: 100dvh;
+  }
+}
+
+/* „Stage“ s referenčnými rozmermi – proporčné škálovanie + centrovanie */
+.k-kitchen-stage{
+  position: absolute;
+  top: 0; left: 50%;
+  width: 1200px;            /* referenčná šírka */
+  height: 800px;            /* referenčná výška */
+  transform-origin: top left;
+
+  /* vypočítaná mierka – fallback */
+  --sx: calc(100vw / 1200);
+  --sy: calc(100vh / 800);
+  --scale: min(var(--sx), var(--sy));
+
+  /* centrovanie + škálovanie (poradie je dôležité) */
+  transform: translateX(-50%) scale(var(--scale));
+
+  padding: 16px;
+  box-sizing: border-box;
+  will-change: transform;
+}
+
+/* iOS/Safari – prepočítaj mierku na 100dvw/100dvh (mimo vnorenia!) */
+@supports (height: 100dvh) {
+  .k-kitchen-stage{
+    --sx: calc(100dvw / 1200);
+    --sy: calc(100dvh / 800);
+    --scale: min(var(--sx), var(--sy));
+  }
+}
+
+/* Pevný 3-stĺpcový grid kariet (layout sa nemení – iba mierka) */
+.k-orders-grid-fixed3{
+  display: grid;
+  grid-template-columns: repeat(3, minmax(320px, 1fr));
+  gap: 16px;
+  align-items: start;
+}
+
+/* Pomôcka proti zalamovaniu názvov v hlavičke */
+.k-kitchen-stage .no-wrap{ white-space: nowrap; }
+
+/* === Kuchyňa: fit-width mód (škáluj len podľa šírky) === */
+.k-fitw-screen{
+  position: fixed;
+  left: 0; top: 0;
+  width: 100vw;  /* fallback */
+  height: 100vh; /* fallback */
+  background: var(--k-bg);
+  overflow-y: auto;      /* povolíme vertikálny scroll, ak výška nestačí */
+  overflow-x: hidden;
+}
+@supports (height: 100dvh) {
+  .k-fitw-screen{ width: 100dvw; height: 100dvh; }
+}
+
+/* stage zarovnáme k ľavému okraju a škálujeme podľa šírky */
+.k-kitchen-stage.k-fitw{
+  position: absolute;
+  left: 0; top: 0;
+  width: 1200px;
+  height: 800px;
+  transform-origin: top left;
+
+  /* šírková mierka */
+  --sx: calc(100vw / 1200);
+  transform: scale(var(--sx));
+
+  padding: 16px;
+  box-sizing: border-box;
+  will-change: transform;
+}
+@supports (width: 100dvw) {
+  .k-kitchen-stage.k-fitw{
+    --sx: calc(100dvw / 1200);
+    transform: scale(var(--sx));
+  }
+}
+
+/* --- role header --- */
+.role-header {
+  position: sticky;
+  top: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 10px 16px;
+  background: #111;
+  color: #fff;
+  border-bottom: 1px solid #222;
+}
+
+.role-header__brand {
+  font-weight: 700;
+  letter-spacing: 0.3px;
+}
+
+.role-header__nav {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.role-tab {
+  padding: 8px 12px;
+  border: 1px solid #2a2a2a;
+  background: #1a1a1a;
+  color: #ddd;
+  border-radius: 8px;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.role-tab:hover { filter: brightness(1.15); }
+
+.role-tab.is-active {
+  background: #3a7bfd;
+  border-color: #3a7bfd;
+  color: #fff;
+}
+
+.role-header__session { margin-left: 16px; display:flex; align-items:center; gap:8px; }
+.role-badge { padding: 6px 10px; background:#222; border:1px solid #2a2a2a; border-radius:8px; color:#ddd; }
+.role-logout { padding: 8px 12px; border:1px solid #ff5757; background:#2a1111; color:#fff; border-radius:8px; cursor:pointer; }
+.role-logout:hover { filter: brightness(1.1); }
+
+/* ---- existujúci header (ponechaj) ---- */
+/* .role-header, .role-header__brand, .role-header__nav, .role-tab, ... */
+
+/* Viditeľnosť podľa breakpointu */
+.hide-on-mobile { display: flex; }
+.show-on-mobile { display: none; }
+
+@media (max-width: 768px) {
+  .hide-on-mobile { display: none !important; }
+  .show-on-mobile { display: inline-flex; }
+  .role-header { position: sticky; top: 0; z-index: 1000; }
+}
+
+/* Hamburger */
+.hamburger {
+  margin-left: auto;
+  width: 40px;
+  height: 36px;
+  border: 1px solid #2a2a2a;
+  background: #1a1a1a;
+  border-radius: 8px;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  cursor: pointer;
+}
+.hamburger span {
+  display: block;
+  width: 18px;
+  height: 2px;
+  background: #ddd;
+  border-radius: 2px;
+  transition: transform .2s ease, opacity .2s ease;
+}
+.hamburger.is-open span:nth-child(1) { transform: translateY(6px) rotate(45deg); }
+.hamburger.is-open span:nth-child(2) { opacity: 0; }
+.hamburger.is-open span:nth-child(3) { transform: translateY(-6px) rotate(-45deg); }
+
+/* Mobilné menu (offcanvas pod headerom) */
+.mobile-menu {
+  position: fixed;
+  top: 56px; /* výška headera */
+  right: 8px;
+  left: 8px;
+  background: #111;
+  border: 1px solid #222;
+  border-radius: 12px;
+  padding: 10px;
+  box-shadow: 0 8px 24px rgba(0,0,0,.4);
+  transform: translateY(-8px);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .15s ease, transform .15s ease;
+}
+.mobile-menu.open {
+  transform: translateY(0);
+  opacity: 1;
+  pointer-events: auto;
+}
+.mobile-menu__section + .mobile-menu__section {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed #2a2a2a;
+}
+.mobile-item {
+  width: 100%;
+  text-align: left;
+  padding: 10px 12px;
+  background: #1a1a1a;
+  border: 1px solid #2a2a2a;
+  color: #ddd;
+  border-radius: 8px;
+  margin-bottom: 8px;
+  font-weight: 600;
+}
+.mobile-item.is-active {
+  background: #3a7bfd;
+  border-color: #3a7bfd;
+  color: #fff;
+}
+.mobile-session {
+  color: #bbb;
+  margin-bottom: 8px;
+}
+.mobile-logout {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #2a1111;
+  border: 1px solid #ff5757;
+  color: #fff;
+  font-weight: 600;
+}
+
+/* Backdrop pri otvorenom menu */
+.mobile-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,.35);
+  z-index: 999; /* pod mobile-menu, nad obsahom */
+}
+
+/* aby nič neblokovalo kliky na header */
+.role-header { pointer-events: auto; }
+.role-header .role-tab { text-decoration: none; display: inline-flex; align-items:center; }
+.mobile-item { text-decoration: none; display:block; }
+
+/* header ostáva na 1000 */
+.role-header { z-index: 1000; }
+
+/* nech je hamburger nad backdropom (pre istotu) */
+.hamburger { z-index: 1002; }
+
+/* menu musí byť NAD backdropom */
+.mobile-menu {
+  position: fixed;
+  /* ... pôvodné ... */
+  z-index: 1003;            /* ⬅️ pridaj toto */
+  pointer-events: auto;     /* keď je open, ber tapy */
+}
+.mobile-menu.open { pointer-events: auto; }
+
+/* backdrop nech je medzi obsahom a menu */
+.mobile-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,.35);
+  z-index: 1001;            /* ⬅️ bolo 999, posúvame pod menu */
+}
+
+/* pre istotu: klikateľné položky */
+.mobile-item { pointer-events: auto; }
+
+.k-vys-btn.prevzate{
+  border-color:#dc2626;
+  background:#fee2e2;
+  color:#b91c1c;
+}
+/* ===== Obsluha – mobilné karty ===== */
+.o-cards{
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+}
+.o-card{
+  background:#fff;
+  border:1px solid var(--k-border);
+  border-radius: var(--k-radius-lg);
+  padding: 12px;
+  box-shadow: var(--k-shadow-sm);
+}
+.o-head{
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  margin-bottom: 8px;
+}
+.o-id{ font-size: 22px; font-weight: 900; }
+.o-time{
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: #111827;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 800;
+}
+.o-items{ display:flex; flex-direction:column; gap:6px; margin-bottom: 8px; }
+.o-item{ display:flex; justify-content:space-between; align-items:center; }
+.o-name{ font-weight: 600; }
+.o-qty{ color: var(--k-muted); min-width: 40px; text-align: right; }
+
+.o-meta{
+  display:flex; justify-content:space-between; align-items:center;
+  border-top: 1px dashed var(--k-border);
+  padding-top: 8px; margin-top: 2px; margin-bottom: 8px;
+}
+.o-chip{
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: #f3f4f6;
+  font-size: 12px; font-weight: 800; color: #374151;
+}
+.o-sum{ font-weight: 900; font-variant-numeric: tabular-nums; }
+
+.o-btn-primary{
+  width: 100%;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid #128a3c;
+  background: var(--k-success);
+  color: #fff;
+  font-weight: 800;
+  cursor: pointer;
+  box-shadow: var(--k-shadow-sm);
+}
+.o-btn-primary:active{ transform: translateY(1px); }
+
+/* drobné vylepšenia tap targetov */
+@media (max-width: 480px){
+  .o-id{ font-size: 20px; }
+  .o-btn-primary{ padding: 14px; }
+}
+
+/* Základ: neklikateľné, skryté */
+.mobile-menu{
+    position: fixed;
+    top: 56px; right: 8px; left: 8px;
+    background: #111;
+    border: 1px solid #222;
+    border-radius: 12px;
+    padding: 10px;
+    box-shadow: 0 8px 24px rgba(0,0,0,.4);
+    transform: translateY(-8px);
+    opacity: 0;
+    pointer-events: none;  /* zatvorené menu nechytá tapy */
+    z-index: 1003;         /* nad backdropom */
+    transition: opacity .15s ease, transform .15s ease;
+}
+.mobile-menu.open{
+    transform: translateY(0);
+    opacity: 1;
+    pointer-events: auto;
+}
+
+/* Backdrop renderuj iba keď je menu otvorené,
+   alebo mu daj pointer-events: none ako default */
+.mobile-backdrop{
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,.35); /* ← oprava 0.35 */
+    z-index: 1001;               /* pod menu, nad obsahom */
+    pointer-events: auto;
+}
+.mobile-menu.open + .mobile-backdrop{
+  /* ak sú súrodenci, sprístupni pri open;
+     inak nastav cez podmienku v Reacte render/backdrop */
+  pointer-events: auto;
+}
+
+/* --- Fix: modaly nad mobilným menu/backdropom --- */
+.modal{
+    position: fixed; inset: 0;
+    z-index: 2000;              /* nad headerom aj mobilným menu */
+}
+.backdrop{
+    position: absolute; inset: 0;
+    background: rgba(0,0,0,.4);
+    z-index: 2000;
+}
+.sheet{
+    position: relative;
+    margin: 6vh auto; max-width: 780px;
+    z-index: 2001;              /* nad backdropom */
+    /* ostatné ponechaj */
+}
+
+/* kiosk.css – vizuál vysielačov */
+.k-vys-btn.ready{  /* červený – čaká na výdaj */
+  border-color:#fca5a5; background:#fee2e2; color:#991b1b;
+}
+.k-vys-btn.prevzate{ /* zelený – vydané */
+  border-color:#A7F3D0; background:#ECFDF5; color:#065F46;
+}
+
+/* Mobilné menu: ak NIE je open, je úplne neinteraktívne */
+.mobile-menu:not(.open){
+  pointer-events: none !important;
+  opacity: 0;                 /* už máš, ale nech je jasné */
+  transform: translateY(-8px);/* už máš, len konzistentnosť */
+}
+
+/* Keď je open, berie tapy normálne */
+.mobile-menu.open{
+  pointer-events: auto !important;
 }

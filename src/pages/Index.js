@@ -7,23 +7,31 @@ export default function Index() {
     const [lastSession, setLastSession] = useState("");
 
     useEffect(() => {
-        const s = sessionStorage.getItem("session");
+        const r = localStorage.getItem("activeRole");
+        if (r === "obsluha") navigate("/obsluha", { replace: true });
+        if (r === "kasa") navigate("/kasa", { replace: true });
+        if (r === "kuchyna") navigate("/kuchyna", { replace: true });
+    }, [navigate]);
+
+    
+    useEffect(() => {
+        const s = localStorage.getItem("sessionCode");
         if (s) setLastSession(s);
     }, []);
 
     function clearLastSession() {
-        sessionStorage.removeItem("session");
-        sessionStorage.removeItem("preset");
-        sessionStorage.removeItem("zvolenyVysielac");
+        localStorage.removeItem("sessionCode");
+        localStorage.removeItem("preset");
+        localStorage.removeItem("zvolenyVysielac");
         setLastSession("");
     }
 
     return (
         <div className="k-wrap">
         <header className="home-hero">
-            <h1 className="home-title">Rýchla obsluha objednávok</h1>
+            <h1 className="home-title">Rýchla pokladňa objednávok</h1>
             <p className="home-subtitle">
-            Vyberte rolu. Obsluha spravuje objednávky a vysielače, Kuchyňa vybavuje pripravenie.
+            Vyberte rolu. Pokladňa spravuje objednávky a vysielače, Kuchyňa vybavuje pripravenie.
             </p>
         </header>
 
@@ -32,13 +40,19 @@ export default function Index() {
             <div className="home-continue-row">
                 <div>
                 <div className="k-help">Naposledy používaná session</div>
-                <div className="home-session">Session <code>{lastSession}</code></div>
+                <div className="home-session">
+                    Session <code>{lastSession}</code>
+                </div>
                 </div>
                 <div className="home-continue-actions">
-                <button className="k-btn primary" onClick={() => navigate("/obsluha")}>
-                    Pokračovať v obsluhe
+                <button className="k-btn primary" onClick={() => navigate("/kasa")}>
+                    Pokračovať ku kase
                 </button>
-                <button className="k-btn" onClick={clearLastSession} title="Odstrániť z pamäte">
+                <button
+                    className="k-btn"
+                    onClick={clearLastSession}
+                    title="Odstrániť z pamäte"
+                >
                     Odstrániť zo zoznamu
                 </button>
                 </div>
@@ -48,13 +62,13 @@ export default function Index() {
 
         <section className="home-roles">
             <article className="home-card">
-            <h2>Obsluha</h2>
+            <h2>Kasa</h2>
             <p className="k-help">
                 Vytváranie objednávok, výber vysielača, potvrdenie a odovzdanie zákazníkovi.
             </p>
             <div className="home-card-footer">
-                <button className="k-btn primary" onClick={() => navigate("/obsluha")}>
-                Otvoriť obsluhu
+                <button className="k-btn primary" onClick={() => navigate("/kasa")}>
+                Otvoriť kasu
                 </button>
             </div>
             </article>
@@ -67,6 +81,16 @@ export default function Index() {
             <div className="home-card-footer">
                 <button className="k-btn accent" onClick={() => navigate("/kuchyna")}>
                 Otvoriť kuchyňu
+                </button>
+            </div>
+            </article>
+
+            <article className="home-card">
+            <h2>Obsluha (výdaj)</h2>
+            <p className="k-help">Prehľad objednávok označených kuchyňou ako HOTOVO.</p>
+            <div className="home-card-footer">
+                <button className="k-btn" onClick={() => navigate("/obsluha")}>
+                Otvoriť obsluhu
                 </button>
             </div>
             </article>

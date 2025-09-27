@@ -11,17 +11,15 @@ export default function Presety() {
   const [vybranyPreset, setVybranyPreset] = useState("");
   const [nazovPresetu, setNazovPresetu] = useState("");
   const [novaPolozka, setNovaPolozka] = useState({ nazov: "", cena: "" });
-  const [editRadok, setEditRadok] = useState(null); // { nazov, cena }
+  const [editRadok, setEditRadok] = useState(null);
   const [novyPresetOpen, setNovyPresetOpen] = useState(false);
 
-  // Načítanie presetov
   useEffect(() => {
     const refPresets = ref(db, "presets");
     const off = onValue(refPresets, (snap) => setPresety(snap.val() || {}));
     return () => off();
   }, []);
 
-  // Obnova/uloženie výberu
   useEffect(() => {
     const ulozeny = sessionStorage.getItem("vybranyPreset");
     if (ulozeny && (presety[ulozeny] || ulozeny === "")) setVybranyPreset(ulozeny);
@@ -30,7 +28,6 @@ export default function Presety() {
     sessionStorage.setItem("vybranyPreset", vybranyPreset || "");
   }, [vybranyPreset]);
 
-  // Položky vybraného presetu
   const polozky = useMemo(() => {
     const p = presety[vybranyPreset] || {};
     return Object.entries(p)
@@ -38,11 +35,9 @@ export default function Presety() {
       .sort((a, b) => a.nazov.localeCompare(b.nazov, "sk"));
   }, [presety, vybranyPreset]);
 
-  // Validácie
-  const hasForbidden = (s) => /[.#$/\[\]]/.test(s);
+  const hasForbidden = (s) => /[.#$/[\]]/.test(s);
   const trimText = (s) => s.trim();
 
-  // Vytvorenie presetu
   async function vytvorPreset() {
     const raw = nazovPresetu;
     const name = trimText(raw);
@@ -60,7 +55,6 @@ export default function Presety() {
     }
   }
 
-  // Mazanie presetu
   async function vymazPreset(nazov) {
     if (!window.confirm(`Naozaj vymazať preset '${nazov}'?`)) return;
     try {
@@ -72,7 +66,6 @@ export default function Presety() {
     }
   }
 
-  // Pridanie položky
   async function pridatPolozku() {
     if (!vybranyPreset) return alert("Vyber preset.");
     const nazov = trimText(novaPolozka.nazov);
@@ -90,7 +83,6 @@ export default function Presety() {
     }
   }
 
-  // Mazanie položky
   async function vymazPolozku(nazov) {
     if (!vybranyPreset) return;
     if (!window.confirm(`Vymazať '${nazov}' z '${vybranyPreset}'?`)) return;
@@ -103,7 +95,6 @@ export default function Presety() {
     }
   }
 
-  // Edit ceny
   function startEdit(nazov, cena) {
     setEditRadok({ nazov, cena: String(cena) });
   }
@@ -120,10 +111,9 @@ export default function Presety() {
     }
   }
 
-  // Navigácia
   function backToObsluha() {
     sessionStorage.setItem("obsluhaScrollY", String(window.scrollY));
-    navigate("/obsluha");
+    navigate("/kasa");
   }
 
   return (
@@ -131,13 +121,13 @@ export default function Presety() {
       {/* TOP BAR */}
       <div className="k-top">
         <div className="k-row" style={{ justifyContent: "space-between" }}>
-          <button className="k-btn" onClick={backToObsluha}>Späť do obsluhy</button>
+          <button className="k-btn" onClick={backToObsluha}>Späť do kasy</button>
           <h1 style={{ margin: 0 }}>Správa presetov</h1>
           <div style={{ width: 140 }} />
         </div>
       </div>
 
-      {/* DVOJSTĹPCOVÝ (na mobile 1 stĺpec) */}
+      {/* DVOJSTĹPCOVÝ */}
       <div className="k-2col">
         {/* Ľavý: vertikálny zoznam presetov */}
         <aside className="k-panel k-aside">

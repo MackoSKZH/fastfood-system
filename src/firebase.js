@@ -19,8 +19,12 @@ const required = {
     appId: "REACT_APP_FIREBASE_APP_ID",
 };
 for (const [key, envName] of Object.entries(required)) {
-    if (!firebaseConfig[key]) throw new Error(`Missing env var ${envName}`);
+    if (!firebaseConfig[key]) {
+        throw new Error(`Missing env var ${envName}`);
+    }
 }
 
 const app = initializeApp(firebaseConfig);
+
 export const db = getDatabase(app);
+export default app;
