@@ -7,10 +7,6 @@ import {
   onValue,
   runTransaction,
   onDisconnect,
-  //onChildAdded,
-  //query,
-  //orderByChild,
-  //startAt,
   get,
 } from "firebase/database";
 import { useNavigate } from "react-router-dom";
@@ -21,6 +17,10 @@ import RoleHeader from "./RoleHeader";
 import { useSession } from "../SessionProvider";
 
 const vysielaceCisla = Array.from({ length: 24 }, (_, i) => i + 1);
+const VIP_VYSIELACE = ["01", "02", "03", "04"];
+const PRIORITY_VYSIELACE = new Set(VIP_VYSIELACE);
+// jeden spoločný zoznam pre render (VIP id idú na začiatok, ale bez separátneho bloku)
+const VYSIELACE_SPOLU = [...vysielaceCisla, ...VIP_VYSIELACE];
 
 export default function Kasa() {
   const navigate = useNavigate();
@@ -121,7 +121,7 @@ export default function Kasa() {
     const ulozenyPreset = sessionStorage.getItem("preset");
     const ulozenyVysielac = sessionStorage.getItem("zvolenyVysielac");
     if (ulozenyPreset) setPreset(ulozenyPreset);
-    if (ulozenyVysielac) setZvolenyVysielac(Number(ulozenyVysielac));
+    if (ulozenyVysielac) setZvolenyVysielac(ulozenyVysielac); // nechaj string („01“)
 
     const y = Number(sessionStorage.getItem("obsluhaScrollY") || "0");
     if (y) requestAnimationFrame(() => window.scrollTo(0, y));
@@ -144,7 +144,6 @@ export default function Kasa() {
     const unlockIfNeeded = async () => {
       if (!session || zvolenyVysielac == null) return;
       if (skipAutoUnlockOnce.current) {
-        // preskoč jednorazovo (návrat po potvrdení objednávky)
         skipAutoUnlockOnce.current = false;
         return;
       }
@@ -161,27 +160,6 @@ export default function Kasa() {
       unlockIfNeeded();
     };
   }, [session, zvolenyVysielac]);
-
-  /*
-  useEffect(() => {
-    if (!session) return;
-    const since = Date.now();
-    const q = query(
-      ref(db, `sessions/${session}/log`),
-      orderByChild("completedAt"),
-      startAt(since)
-    );
-    const off = onChildAdded(q, (snap) => {
-      const rec = snap.val() || {};
-      const vys = rec?.vysielac ?? "—";
-      const pol = rec?.polozky || {};
-      const summary = Object.entries(pol)
-        .map(([n, ks]) => `${ks}× ${n}`)
-        .join(", ");
-    });
-    return () => off();
-  }, [session]);
-  */
 
   // Výber vysielača z gridu
   async function vybratVysielac(cislo) {
@@ -319,15 +297,9 @@ export default function Kasa() {
 
   async function potvrditObjednavku() {
     try {
-      if (!session) {
-        return;
-      }
-      if (!zvolenyVysielac) {
-        return;
-      }
-      if (Object.keys(objednavka).length === 0) {
-        return;
-      }
+      if (!session) return;
+      if (!zvolenyVysielac) return;
+      if (Object.keys(objednavka).length === 0) return;
 
       const ordersRef = ref(db, `sessions/${session}/objednavky`);
       const newRef = push(ordersRef);
@@ -410,13 +382,19 @@ export default function Kasa() {
             {!zvolenyVysielac && (
               <div className="k-panel">
                 <h2 className="k-title">Zvoľte vysielač</h2>
+
+                {/* Jeden spoločný grid pre VIP aj bežné */}
                 <div className="k-vysielace">
-                  {vysielaceCisla.map((cislo) => {
+                  {VYSIELACE_SPOLU.map((cislo) => {
+                    const key = typeof cislo === "number" ? `std-${cislo}` : `vip-${cislo}`;
                     const state = zablokovaneVysielace[cislo];
                     const isLocked   = state === true || state === "locked";
                     const isReady    = state === "ready";
                     const isPrevzate = state === "prevzate";
-                    const btnClass = isLocked ? "locked" : isReady ? "ready" : isPrevzate ? "prevzate" : "free";
+                    const btnClass = [
+                      isLocked ? "locked" : isReady ? "ready" : isPrevzate ? "prevzate" : "free",
+                      PRIORITY_VYSIELACE.has(String(cislo)) ? "priority" : ""
+                    ].filter(Boolean).join(" ");
                     const title = isLocked
                       ? "Zablokovaný"
                       : isReady
@@ -427,13 +405,13 @@ export default function Kasa() {
 
                     return (
                       <button
-                        key={cislo}
+                        key={key}
                         className={`k-vys-btn ${btnClass}`}
                         disabled={isLocked}
                         onClick={() => vybratVysielac(cislo)}
                         title={title}
                       >
-                        {cislo}
+                        {String(cislo)}
                         {state && (
                           <span className="k-flag">
                             {isPrevzate ? "PREV" : isReady ? "READY" : "LOCK"}
@@ -443,6 +421,7 @@ export default function Kasa() {
                     );
                   })}
                 </div>
+
                 <div className="k-help" style={{ marginTop: 8 }}>
                   Najprv zvoľte vysielač. Potom sa zobrazí ponuka.
                 </div>
