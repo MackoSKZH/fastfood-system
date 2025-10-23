@@ -141,7 +141,7 @@ export default function Obsluha() {
     if (!session) return;
     await set(ref(db, `sessions/${session}/prevzate/${id}`), true);
     if (vys != null) {
-      await set(ref(db, `sessions/${session}/vysielace/${vys}`), "prevzate");
+      await set(ref(db, `sessions/${session}/vysielace/${vys}`), null);
     }
   }
 
