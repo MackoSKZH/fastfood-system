@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { db } from "../firebase";
-import { ref, onValue, get, push, set } from "firebase/database";
+import { ref, onValue, get, push, set, runTransaction, remove } from "firebase/database";
 import "./kiosk.css";
 import "./kuchyna.css";
 import RoleHeader from "./RoleHeader";
@@ -9,7 +9,7 @@ import { useSession } from "../SessionProvider";
 export default function Kuchyna() {
   const { sessionCode: session } = useSession();
   const [objednavky, setObjednavky] = useState([]);
-  const [checked, setChecked] = useState({});
+  const [checked, setChecked] = useState({}); // zdieľaný stav z DB
   const [now, setNow] = useState(Date.now());
 
   const [showInfo, setShowInfo] = useState(false);
@@ -31,6 +31,7 @@ export default function Kuchyna() {
     return () => clearInterval(id);
   }, []);
 
+  // objednávky
   useEffect(() => {
     if (!session) return;
     const objednavkyRef = ref(db, `sessions/${session}/objednavky`);
@@ -42,6 +43,15 @@ export default function Kuchyna() {
     return () => unsub();
   }, [session]);
 
+  // zdieľané checkboxy
+  useEffect(() => {
+    if (!session) return;
+    const checksRef = ref(db, `sessions/${session}/kuchynaChecks`);
+    const off = onValue(checksRef, (s) => setChecked(s.val() || {}));
+    return () => off();
+  }, [session]);
+
+  // Info/štatistiky
   useEffect(() => {
     if (!showInfo || !session) return;
 
@@ -122,47 +132,31 @@ export default function Kuchyna() {
     };
   }, [showInfo, session]);
 
-  // všetky čakajúce zoradené
+  // čakajúce objednávky, VIP dopredu
   const waitingOrders = useMemo(() => {
+    const VIP = new Set(["01", "02", "03", "04"]);
     return objednavky
       .filter((o) => o?.status === "waiting")
-      .sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+      .sort((a, b) => {
+        const pa = VIP.has(String(a.vysielac)) ? 0 : 1;
+        const pb = VIP.has(String(b.vysielac)) ? 0 : 1;
+        if (pa !== pb) return pa - pb;
+        return (a.timestamp || 0) - (b.timestamp || 0);
+      });
   }, [objednavky]);
 
-  // počet strán + clamp page, keď sa mení počet objednávok
+  // stránky
   const pageCount = Math.max(1, Math.ceil(waitingOrders.length / pageSize));
   useEffect(() => {
     setPage((p) => Math.min(Math.max(0, p), pageCount - 1));
   }, [pageCount]);
 
-  // aktuálna stránka
   const visibleOrders = useMemo(() => {
     const start = page * pageSize;
     return waitingOrders.slice(start, start + pageSize);
   }, [waitingOrders, page]);
 
-  // UDRŽANIE checkov: synchronizuj pre všetky čakajúce, ale zachovaj existujúce hodnoty
-  useEffect(() => {
-    setChecked((prev) => {
-      const next = {};
-      waitingOrders.forEach((o) => {
-        const prevMap = prev[o.id] || {};
-        const m = {};
-        Object.entries(o.polozky || {}).forEach(([nazov, pocet]) => {
-          const n = Number(pocet || 0);
-          for (let i = 0; i < n; i++) {
-            const key = `${nazov}-${i}`;
-            m[key] = Object.prototype.hasOwnProperty.call(prevMap, key)
-              ? prevMap[key]
-              : false;
-          }
-        });
-        next[o.id] = m;
-      });
-      return next;
-    });
-  }, [waitingOrders]);
-
+  // výpočet „Zostáva pripraviť“ (odpočítava zaškrtnuté z aktuálnej stránky)
   const toPrep = useMemo(() => {
     const sum = {};
     waitingOrders.forEach((o) => {
@@ -171,7 +165,6 @@ export default function Kuchyna() {
       });
     });
 
-    // odpočítaj už odškrtnuté len z aktuálnej stránky
     visibleOrders.forEach((o) => {
       const m = checked[o.id] || {};
       Object.entries(m).forEach(([key, v]) => {
@@ -190,21 +183,37 @@ export default function Kuchyna() {
     return { items, total };
   }, [waitingOrders, visibleOrders, checked]);
 
-  function isOrderComplete(orderId) {
-    const m = checked[orderId] || {};
-    const vals = Object.values(m);
-    return vals.length > 0 && vals.every(Boolean);
+  function totalItemsInOrder(order) {
+    return Object.values(order?.polozky || {}).reduce(
+      (sum, ks) => sum + Number(ks || 0),
+      0
+    );
   }
 
-  function toggleItem(orderId, itemKey) {
-    setChecked((prev) => ({
-      ...prev,
-      [orderId]: {
-        ...(prev[orderId] || {}),
-        [itemKey]: !prev[orderId]?.[itemKey],
-      },
-    }));
+  function isOrderComplete(order) {
+    const m = checked[order.id] || {};
+    const checkedTrue = Object.values(m).filter(Boolean).length;
+    const expected = totalItemsInOrder(order);
+    return expected > 0 && checkedTrue >= expected;
   }
+
+  // toggle zapisuje do DB (zdieľané)
+  function toggleItem(orderId, itemKey) {
+    if (!session) return;
+    const cellRef = ref(db, `sessions/${session}/kuchynaChecks/${orderId}/${itemKey}`);
+    runTransaction(cellRef, (cur) => !cur);
+  }
+
+  // priebežný cleanup: odstráň checky pre objednávky, ktoré už nie sú 'waiting'
+  useEffect(() => {
+    if (!session) return;
+    const waitingIds = new Set(waitingOrders.map((o) => o.id));
+    Object.keys(checked || {}).forEach((orderId) => {
+      if (!waitingIds.has(orderId)) {
+        remove(ref(db, `sessions/${session}/kuchynaChecks/${orderId}`));
+      }
+    });
+  }, [session, waitingOrders, checked]);
 
   function formatElapsed(ms) {
     if (ms < 0) ms = 0;
@@ -236,11 +245,8 @@ export default function Kuchyna() {
       });
       await set(ref(db, `sessions/${session}/vysielace/${order.vysielac}`), "ready");
       await set(ref(db, `sessions/${session}/objednavky/${order.id}`), null);
-      setChecked((prev) => {
-        const next = { ...prev };
-        delete next[order.id];
-        return next;
-      });
+      // vyčisti zdieľané checkboxy pre túto objednávku
+      await remove(ref(db, `sessions/${session}/kuchynaChecks/${order.id}`));
     } catch (e) {
       console.error("HOTOVO zlyhalo:", e);
     }
@@ -313,7 +319,7 @@ export default function Kuchyna() {
           <p className="muted">Žiadne objednávky zatiaľ.</p>
         ) : (
           <div className="orders-wrap">
-            {/* Pager šípky */}
+            {/* Pager šípky (pozície/zelene rieši CSS v kuchyna.css) */}
             <button
               className="pager left"
               onClick={() => setPage((p) => Math.max(0, p - 1))}
@@ -336,7 +342,7 @@ export default function Kuchyna() {
             <div className="orders-grid">
               {visibleOrders.map((o) => {
                 const elapsedMs = Math.max(0, now - (o.timestamp || now));
-                const complete = isOrderComplete(o.id);
+                const complete = isOrderComplete(o);
                 return (
                   <div key={o.id} className="order-card">
                     <div className="order-head">
