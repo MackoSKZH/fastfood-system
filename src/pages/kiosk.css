@@ -733,3 +733,28 @@ code{ background:#f3f4f6; padding:2px 6px; border-radius:6px }
 .mobile-menu.open{
   pointer-events: auto !important;
 }
+
+/* VIP oranžové vysielače 01–04 */
+.k-vys-btn.priority {
+  border-color: #fb923c;     /* orange-400 */
+  background: #fff7ed;       /* orange-50 */
+  color: #7c2d12;            /* orange-900 */
+}
+
+.k-vys-btn.priority.locked {
+  border-color: #fed7aa;     /* orange-200 */
+  background: #ffedd5;       /* orange-100 */
+  color: #a8a29e;            /* sivkastá – vyblednutý vzhľad */
+}
+
+.k-vys-btn.priority.ready {
+  border-color: #f97316;     /* orange-500 */
+  background: #ffedd5;       /* orange-100 */
+  color: #7c2d12;            /* tmavý text */
+}
+
+.k-vys-btn.priority.prevzate {
+  border-color: #fdba74;     /* orange-300 */
+  background: #fff7ed;       /* orange-50 */
+  color: #78350f;            /* tmavo-oranžová */
+}
