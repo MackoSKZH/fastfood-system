@@ -7,7 +7,6 @@ import {
   onValue,
   runTransaction,
   onDisconnect,
-  get,
 } from "firebase/database";
 import { useNavigate } from "react-router-dom";
 import InfoModal from "../components/InfoModal";
@@ -16,11 +15,7 @@ import "./kiosk.css";
 import RoleHeader from "./RoleHeader";
 import { useSession } from "../SessionProvider";
 
-const vysielaceCisla = Array.from({ length: 24 }, (_, i) => i + 1);
 const VIP_VYSIELACE = ["01", "02", "03", "04"];
-const PRIORITY_VYSIELACE = new Set(VIP_VYSIELACE);
-// jeden spoločný zoznam pre render (VIP id idú na začiatok, ale bez separátneho bloku)
-const VYSIELACE_SPOLU = [...vysielaceCisla, ...VIP_VYSIELACE];
 
 export default function Kasa() {
   const navigate = useNavigate();
@@ -33,39 +28,48 @@ export default function Kasa() {
   const [zvolenyVysielac, setZvolenyVysielac] = useState(null);
   const [objednavka, setObjednavka] = useState({});
   const [showInfo, setShowInfo] = useState(false);
-
-  // PREVZATIE cez modal (pre červené "ready")
-  const [readyModalOpen, setReadyModalOpen] = useState(false);
-  const [readyVysielac, setReadyVysielac] = useState(null);
-  const [readyRec, setReadyRec] = useState(null);
+  const [logZaznamy, setLogZaznamy] = useState([]);
   const [prevzateMap, setPrevzateMap] = useState({});
+  const [now, setNow] = useState(Date.now());
+  const [zaplatene, setZaplatene] = useState(0);
+  const [objednavkaPrilohy, setObjednavkaPrilohy] = useState({});
 
-  // trackujeme, či sme vysielač reálne uzamkli (true) a jednorazové preskočenie auto-unlocku po potvrdení
   const mamAktivnyLock = useRef(false);
   const skipAutoUnlockOnce = useRef(false);
 
-  // Presety zoznam
   useEffect(() => {
-    const presetsRef = ref(db, "presets");
-    const off = onValue(presetsRef, (snap) => {
-      const data = snap.val() || {};
-      setVsetkyPresety(Object.keys(data));
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, []);
+
+  useEffect(() => {
+    const off = onValue(ref(db, "presets"), (snap) => {
+      setVsetkyPresety(Object.keys(snap.val() || {}));
     });
     return () => off();
   }, []);
 
-  // Session preset
   useEffect(() => {
     if (!session) return;
-    const sessionRef = ref(db, `sessions/${session}`);
-    const off = onValue(sessionRef, (snap) => {
+    const off = onValue(ref(db, `sessions/${session}`), (snap) => {
       const data = snap.val();
-      if (data && data.preset) setPreset(data.preset);
+      if (data?.preset) setPreset(data.preset);
     });
     return () => off();
   }, [session]);
 
-  // Prevzaté logy
+  useEffect(() => {
+    if (!session) return;
+    const off = onValue(ref(db, `sessions/${session}/log`), (s) => {
+      const val = s.val() || {};
+      const arr = Object.entries(val)
+        .map(([id, rec]) => ({ id, ...rec }))
+        .sort((a, b) => (b.completedAt || b.createdAt || 0) - (a.completedAt || a.createdAt || 0));
+      setLogZaznamy(arr);
+    });
+    return () => off();
+  }, [session]);
+
   useEffect(() => {
     if (!session) return;
     const off = onValue(ref(db, `sessions/${session}/prevzate`), (s) => {
@@ -74,55 +78,34 @@ export default function Kasa() {
     return () => off();
   }, [session]);
 
-  // Načítaj položky pre modal, keď je vybraný "ready" vysielač
-  useEffect(() => {
-    if (!session || readyVysielac == null) {
-      setReadyRec(null);
-      return;
-    }
-    const off = onValue(ref(db, `sessions/${session}/log`), (s) => {
-      const data = s.val() || {};
-      const list = Object.entries(data)
-        .map(([id, rec]) => ({ id, ...rec }))
-        .filter((r) => r.vysielac === readyVysielac && !prevzateMap[r.id])
-        .sort((a, b) => (b.completedAt || 0) - (a.completedAt || 0));
-      setReadyRec(list[0] || null);
-    });
-    return () => off();
-  }, [session, readyVysielac, prevzateMap]);
-
-  // Menu pre aktuálny preset
   useEffect(() => {
     if (!preset) return;
-    const presetRef = ref(db, `presets/${preset}`);
-    const offMenu = onValue(presetRef, (snapshot) => {
-      const data = snapshot.val() || {};
-      const arr = Object.entries(data).map(([nazov, v]) => ({
+    const off = onValue(ref(db, `presets/${preset}`), (snap) => {
+      const data = snap.val() || {};
+      setMenu(Object.entries(data).map(([nazov, v]) => ({
         nazov,
         cena: Number((v && v.cena) ?? 0),
-      }));
-      setMenu(arr);
+        prilohy: Object.entries(v?.prilohy || {})
+          .map(([pn, pv]) => ({ nazov: pn, cena: Number(pv?.cena ?? 0) }))
+          .sort((a, b) => a.nazov.localeCompare(b.nazov, "sk")),
+      })));
     });
-    return () => offMenu();
+    return () => off();
   }, [preset]);
 
-  // Stav vysielačov
   useEffect(() => {
     if (!session) return;
-    const vysRef = ref(db, `sessions/${session}/vysielace`);
-    const off = onValue(vysRef, (snap) => {
+    const off = onValue(ref(db, `sessions/${session}/vysielace`), (snap) => {
       setZablokovaneVysielace(snap.val() || {});
     });
     return () => off();
   }, [session]);
 
-  // SessionStorage init
   useEffect(() => {
     const ulozenyPreset = sessionStorage.getItem("preset");
     const ulozenyVysielac = sessionStorage.getItem("zvolenyVysielac");
     if (ulozenyPreset) setPreset(ulozenyPreset);
-    if (ulozenyVysielac) setZvolenyVysielac(ulozenyVysielac); // nechaj string („01“)
-
+    if (ulozenyVysielac) setZvolenyVysielac(ulozenyVysielac);
     const y = Number(sessionStorage.getItem("obsluhaScrollY") || "0");
     if (y) requestAnimationFrame(() => window.scrollTo(0, y));
   }, []);
@@ -139,14 +122,10 @@ export default function Kasa() {
     }
   }, [zvolenyVysielac]);
 
-  // Auto-unlock len ak sme reálne zamkli a nepreskakujeme ho po potvrdení
   useEffect(() => {
     const unlockIfNeeded = async () => {
       if (!session || zvolenyVysielac == null) return;
-      if (skipAutoUnlockOnce.current) {
-        skipAutoUnlockOnce.current = false;
-        return;
-      }
+      if (skipAutoUnlockOnce.current) { skipAutoUnlockOnce.current = false; return; }
       if (!mamAktivnyLock.current) return;
       try {
         await set(ref(db, `sessions/${session}/vysielace/${zvolenyVysielac}`), null);
@@ -156,123 +135,41 @@ export default function Kasa() {
         mamAktivnyLock.current = false;
       }
     };
-    return () => {
-      unlockIfNeeded();
-    };
+    return () => { unlockIfNeeded(); };
   }, [session, zvolenyVysielac]);
 
-  // Výber vysielača z gridu
-  async function vybratVysielac(cislo) {
+  function orderColor(id) {
+    let h = 0;
+    const s = String(id || "");
+    for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) & 0xffffffff;
+    return `hsl(${Math.abs(h) % 360}, 50%, 91%)`;
+  }
+
+  function timeAgo(ts) {
+    const diff = Math.max(1, Math.floor((now - (ts || now)) / 1000));
+    if (diff < 60) return `${diff}s`;
+    const m = Math.floor(diff / 60);
+    if (m < 60) return `${m}m`;
+    return `${Math.floor(m / 60)}h`;
+  }
+
+  async function oznacitPrevzate(id, vys = null) {
     if (!session) return;
-    const lockRef = ref(db, `sessions/${session}/vysielace/${cislo}`);
-
-    try {
-      const snap = await get(lockRef);
-      const val = snap.val();
-
-      // klik na "prevzate" → len odomkni
-      if (val === "prevzate") {
-        await set(lockRef, null);
-        return;
-      }
-
-      // klik na "ready" → otvor MODAL (bez locku)
-      if (val === "ready") {
-        setReadyVysielac(cislo);
-        setReadyModalOpen(true);
-        try { await onDisconnect(lockRef).cancel(); } catch {}
-        return;
-      }
-    } catch {}
-
-    // bežný lock pre tvorbu objednávky
-    try {
-      const res = await runTransaction(
-        lockRef,
-        (current) => {
-          if (current === true || current === "locked") return;  // už zamknutý
-          if (current === "prevzate") return;                     // zelený neprepisuj
-          if (current === "ready") return current;                // červený nelockuj
-          return true;                                            // nastav lock
-        },
-        { applyLocally: false }
-      );
-
-      if (res.committed) {
-        const v = res.snapshot?.val();
-        if (v === true || v === "locked" || v === true || v == null) {
-          setZvolenyVysielac(cislo);
-          mamAktivnyLock.current = true;              // máme aktívny lock
-          try { await onDisconnect(lockRef).remove(); } catch {}
-        } else if (v === "ready") {
-          // fallback – ako hore: otvor modal
-          setReadyVysielac(cislo);
-          setReadyModalOpen(true);
-          mamAktivnyLock.current = false;
-          try { await onDisconnect(lockRef).cancel(); } catch {}
-        }
-      } else {
-        const v = res.snapshot?.val();
-        if (v === true || v === "locked") {
-        } else if (v === "prevzate") {
-        }
-      }
-    } catch (e) {
-      console.error("Chyba pri výbere vysielača:", e);
+    await set(ref(db, `sessions/${session}/prevzate/${id}`), true);
+    if (vys != null) {
+      await set(ref(db, `sessions/${session}/vysielace/${vys}`), null);
     }
-  }
-
-  async function safeReleaseLock() {
-    if (!session || zvolenyVysielac == null) return;
-    const lockRef = ref(db, `sessions/${session}/vysielace/${zvolenyVysielac}`);
-    try {
-      try { await onDisconnect(lockRef).cancel(); } catch {}
-      if (mamAktivnyLock.current) {
-        await set(lockRef, null);
-      }
-    } catch (e) {
-      console.error("Chyba pri uvoľnení vysielača:", e);
-    } finally {
-      mamAktivnyLock.current = false;
-      setZvolenyVysielac(null);
-      setObjednavka({});
-      sessionStorage.removeItem("zvolenyVysielac");
-    }
-  }
-
-  async function spatKVysielacom() {
-    await safeReleaseLock();
-  }
-
-  // ODOVZDAŤ (ready -> normálny stav) cez modal
-  async function odovzdatAktualny() {
-    if (!session || !readyRec || readyVysielac == null) return;
-
-    await set(ref(db, `sessions/${session}/prevzate/${readyRec.id}`), true);
-    // po odovzdaní rovno VOĽNÝ
-    await set(ref(db, `sessions/${session}/vysielace/${readyVysielac}`), null);
-
-    try { await onDisconnect(ref(db, `sessions/${session}/vysielace/${readyVysielac}`)).cancel(); } catch {}
-
-    setReadyRec(null);
-    setReadyModalOpen(false);
-    setReadyVysielac(null);
-  }
-
-  function zavrietReadyModal() {
-    setReadyModalOpen(false);
-    setReadyVysielac(null);
-    setReadyRec(null);
   }
 
   async function zrusitObjednavku() {
-    if (Object.keys(objednavka).length === 0) {
-      await safeReleaseLock();
-      return;
+    if (Object.keys(objednavka).length > 0) {
+      const ok = window.confirm("Zrušiť rozpracovanú objednávku?");
+      if (!ok) return;
     }
-    const ok = window.confirm("Zrušiť rozpracovanú objednávku?");
-    if (!ok) return;
     setObjednavka({});
+    setObjednavkaPrilohy({});
+    setZvolenyVysielac(null);
+    setZaplatene(0);
   }
 
   function pridajPolozku(nazov) {
@@ -289,39 +186,91 @@ export default function Kasa() {
   }
 
   function spocitajCenu() {
-    return Object.entries(objednavka).reduce((sum, [nazov, pocet]) => {
+    let sum = Object.entries(objednavka).reduce((s, [nazov, pocet]) => {
       const p = menu.find((m) => m.nazov === nazov);
-      return sum + ((p && p.cena) || 0) * (pocet || 0);
+      return s + ((p?.cena) || 0) * (pocet || 0);
     }, 0);
+    Object.entries(objednavkaPrilohy).forEach(([itemName, prilohy]) => {
+      if (!objednavka[itemName]) return;
+      const menuItem = menu.find((m) => m.nazov === itemName);
+      if (!menuItem) return;
+      Object.entries(prilohy).forEach(([prilohaName, count]) => {
+        const pr = menuItem.prilohy?.find((p) => p.nazov === prilohaName);
+        sum += (pr?.cena || 0) * count;
+      });
+    });
+    return Math.round(sum * 100) / 100;
+  }
+
+  function pridajPrilohu(itemNazov, prilohaName) {
+    setObjednavkaPrilohy((prev) => ({
+      ...prev,
+      [itemNazov]: { ...prev[itemNazov], [prilohaName]: ((prev[itemNazov]?.[prilohaName]) || 0) + 1 },
+    }));
+  }
+
+  function odobratPrilohu(itemNazov, prilohaName) {
+    setObjednavkaPrilohy((prev) => {
+      const item = { ...prev[itemNazov] };
+      if ((item[prilohaName] || 0) > 1) item[prilohaName]--;
+      else delete item[prilohaName];
+      if (Object.keys(item).length === 0) {
+        const next = { ...prev };
+        delete next[itemNazov];
+        return next;
+      }
+      return { ...prev, [itemNazov]: item };
+    });
   }
 
   async function potvrditObjednavku() {
     try {
-      if (!session) return;
-      if (!zvolenyVysielac) return;
-      if (Object.keys(objednavka).length === 0) return;
+      if (!session || !zvolenyVysielac || Object.keys(objednavka).length === 0) return;
 
-      const ordersRef = ref(db, `sessions/${session}/objednavky`);
-      const newRef = push(ordersRef);
+      const lockRef = ref(db, `sessions/${session}/vysielace/${zvolenyVysielac}`);
+      const res = await runTransaction(
+        lockRef,
+        (current) => {
+          if (current === true || current === "locked") return;
+          if (current === "ready" || current === "pripraveny") return;
+          return true;
+        },
+        { applyLocally: false }
+      );
+
+      if (!res.committed) {
+        const st = res.snapshot?.val();
+        alert(st === "ready" ? "Tento vysielač má pripravenú objednávku." : "Tento vysielač je momentálne zamknutý.");
+        return;
+      }
+
+      mamAktivnyLock.current = true;
+      try { await onDisconnect(lockRef).remove(); } catch {}
+
+      const filteredPrilohy = {};
+      Object.entries(objednavkaPrilohy).forEach(([k, v]) => {
+        if (objednavka[k] && Object.keys(v).length > 0) filteredPrilohy[k] = v;
+      });
+
+      const newRef = push(ref(db, `sessions/${session}/objednavky`));
       await set(newRef, {
         vysielac: zvolenyVysielac,
         polozky: objednavka,
+        ...(Object.keys(filteredPrilohy).length > 0 ? { prilohy: filteredPrilohy } : {}),
         suma: spocitajCenu(),
         status: "waiting",
         timestamp: Date.now(),
       });
 
-      // po potvrdení nech vysielač ZOSTANE zamknutý (true)
-      const lockRef = ref(db, `sessions/${session}/vysielace/${zvolenyVysielac}`);
       try { await onDisconnect(lockRef).cancel(); } catch {}
       await set(lockRef, true);
       mamAktivnyLock.current = true;
 
-      // vrátime sa na grid, ale BEZ auto-unlocku pri cleanup-e
       skipAutoUnlockOnce.current = true;
       setObjednavka({});
+      setObjednavkaPrilohy({});
       setZvolenyVysielac(null);
-
+      setZaplatene(0);
     } catch (err) {
       console.error("Chyba pri potvrdení objednávky:", err);
     }
@@ -343,13 +292,14 @@ export default function Kasa() {
     navigate("/presety");
   }
 
+  const nevydane = logZaznamy.filter((z) => !prevzateMap[z.id]);
+
   if (!session) return null;
 
   return (
     <>
       <RoleHeader />
       <div className="k-wrap">
-        {/* TOP BAR */}
         <div className="k-top">
           <div className="k-row" style={{ justifyContent: "space-between" }}>
             <div className="k-row">
@@ -375,186 +325,280 @@ export default function Kasa() {
         </div>
         {showInfo && <InfoModal session={session} onClose={() => setShowInfo(false)} />}
 
-        {/* GRID: MENU + KOŠÍK */}
         <div className="k-grid">
           <div className="k-col">
-            {/* PANEL VYSIELAČOV */}
-            {!zvolenyVysielac && (
-              <div className="k-panel">
-                <h2 className="k-title">Zvoľte vysielač</h2>
+            <div className="k-panel">
+              <div className="k-menu">
+                {menu.length === 0 && <i>Menu je prázdne.</i>}
+                {menu.map((p) => {
+                  const count = objednavka[p.nazov] || 0;
+                  return (
+                    <div className="k-card" key={p.nazov}>
+                      <div className="name">{p.nazov}</div>
+                      <div className="price">€{p.cena.toFixed(2)}</div>
+                      <div className="actions">
+                        <button className="k-btn primary" onClick={() => pridajPolozku(p.nazov)}>Pridať</button>
+                        {count > 0 && (
+                          <div className="k-qty">
+                            <button className="k-btn" onClick={() => odobratPolozku(p.nazov)} aria-label="Odobrať">–</button>
+                            <strong>{count}</strong>
+                            <button className="k-btn" onClick={() => pridajPolozku(p.nazov)} aria-label="Pridať">+</button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
 
-                {/* Jeden spoločný grid pre VIP aj bežné */}
-                <div className="k-vysielace">
-                  {VYSIELACE_SPOLU.map((cislo) => {
-                    const key = typeof cislo === "number" ? `std-${cislo}` : `vip-${cislo}`;
-                    const state = zablokovaneVysielace[cislo];
-                    const isLocked   = state === true || state === "locked";
-                    const isReady    = state === "ready";
-                    const isPrevzate = state === "prevzate";
-                    const btnClass = [
-                      isLocked ? "locked" : isReady ? "ready" : isPrevzate ? "prevzate" : "free",
-                      PRIORITY_VYSIELACE.has(String(cislo)) ? "priority" : ""
-                    ].filter(Boolean).join(" ");
-                    const title = isLocked
-                      ? "Zablokovaný"
-                      : isReady
-                      ? "Pripravený na odovzdanie"
-                      : isPrevzate
-                      ? "Prevzatý – ťuknutím odomkneš"
-                      : "Voľný";
+          <div style={{ display: "flex", flexDirection: "column", gap: 12, alignSelf: "start" }}>
+            <aside className="k-panel k-cart" style={{ position: "static", width: "100%" }}>
+              <h3 style={{ marginTop: 0 }}>Moja objednávka</h3>
 
+              <div style={{ marginBottom: 12 }}>
+                <div className="k-help" style={{ marginBottom: 4 }}>Prednostné:</div>
+                <div className="k-row" style={{ flexWrap: "wrap", gap: 4, marginBottom: 8 }}>
+                  {VIP_VYSIELACE.map((v) => {
+                    const st = zablokovaneVysielace[v];
+                    const locked = st === true || st === "locked";
+                    const isSelected = String(zvolenyVysielac) === v;
                     return (
                       <button
-                        key={key}
-                        className={`k-vys-btn ${btnClass}`}
-                        disabled={isLocked}
-                        onClick={() => vybratVysielac(cislo)}
-                        title={title}
+                        key={v}
+                        className={`k-btn${isSelected ? " accent" : ""}`}
+                        disabled={locked && !isSelected}
+                        onClick={() => setZvolenyVysielac(isSelected ? null : v)}
+                        title={locked ? "Zamknutý" : "Prednostný vysielač"}
                       >
-                        {String(cislo)}
-                        {state && (
-                          <span className="k-flag">
-                            {isPrevzate ? "PREV" : isReady ? "READY" : "LOCK"}
-                          </span>
-                        )}
+                        {v}
                       </button>
                     );
                   })}
                 </div>
-
-                <div className="k-help" style={{ marginTop: 8 }}>
-                  Najprv zvoľte vysielač. Potom sa zobrazí ponuka.
+                <div className="k-row" style={{ alignItems: "center", gap: 8 }}>
+                  <label style={{ whiteSpace: "nowrap" }}>Vysielač:</label>
+                  <input
+                    type="number"
+                    min="1"
+                    max="24"
+                    placeholder="1–24"
+                    value={zvolenyVysielac !== null && !VIP_VYSIELACE.includes(String(zvolenyVysielac)) ? zvolenyVysielac : ""}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setZvolenyVysielac(val ? Number(val) : null);
+                    }}
+                    style={{ width: 70, padding: "6px 8px", borderRadius: 8, border: "1px solid #ccc", fontSize: 15 }}
+                  />
+                  {zvolenyVysielac !== null && (() => {
+                    const st = zablokovaneVysielace[zvolenyVysielac];
+                    if (st === true || st === "locked") return <span style={{ color: "#dc2626" }}>Zamknutý</span>;
+                    if (st === "ready") return <span style={{ color: "#d97706" }}>Pripravený</span>;
+                    if (st === "prevzate") return <span style={{ color: "#16a34a" }}>Prevzatý</span>;
+                    if (zvolenyVysielac) return <span style={{ color: "#16a34a" }}>Voľný</span>;
+                    return null;
+                  })()}
                 </div>
               </div>
-            )}
 
-            {/* MENU GRID – klasická tvorba objednávky */}
-            {zvolenyVysielac && (
-              <div className="k-panel" style={{ marginTop: 12 }}>
-                <h2 className="k-title">Vysielač #{zvolenyVysielac}</h2>
-                <div className="k-menu">
-                  {menu.length === 0 && <i>Menu je prázdne.</i>}
-                  {menu.map((p) => {
-                    const count = objednavka[p.nazov] || 0;
-                    return (
-                      <div className="k-card" key={p.nazov}>
-                        <div className="name">{p.nazov}</div>
-                        <div className="price">€{p.cena.toFixed(2)}</div>
-                        <div className="actions">
-                          <button className="k-btn primary" onClick={() => pridajPolozku(p.nazov)}>Pridať</button>
-                          {count > 0 && (
-                            <div className="k-qty">
-                              <button className="k-btn" onClick={() => odobratPolozku(p.nazov)} aria-label="Odobrať">–</button>
-                              <strong>{count}</strong>
-                              <button className="k-btn" onClick={() => pridajPolozku(p.nazov)} aria-label="Pridať">+</button>
+              {Object.keys(objednavka).length === 0 ? (
+                <p className="k-help">Žiadne položky. Pridajte z ponuky.</p>
+              ) : (
+                <>
+                  <div>
+                    {Object.entries(objednavka).map(([nazov, pocet]) => {
+                      const pol = menu.find((m) => m.nazov === nazov);
+                      const cena = (pol?.cena || 0) * pocet;
+                      const dostupnePrilohy = pol?.prilohy || [];
+                      return (
+                        <div key={nazov}>
+                          <div className="row">
+                            <div style={{ maxWidth: 220 }}>
+                              <strong>{nazov}</strong>{" "}
+                              <span className="k-help">×{pocet}</span>
+                            </div>
+                            <div>€{cena.toFixed(2)}</div>
+                          </div>
+                          {dostupnePrilohy.length > 0 && (
+                            <div style={{ paddingLeft: 12, marginBottom: 4 }}>
+                              {dostupnePrilohy.map((p) => {
+                                const cnt = objednavkaPrilohy[nazov]?.[p.nazov] || 0;
+                                return (
+                                  <div key={p.nazov} className="k-row" style={{ justifyContent: "space-between", padding: "2px 0" }}>
+                                    <span className="k-help">↳ {p.nazov} <span style={{ color: "#6b7280" }}>€{p.cena.toFixed(2)}</span></span>
+                                    <div className="k-row" style={{ gap: 4 }}>
+                                      {cnt > 0 && (
+                                        <>
+                                          <button className="k-btn" style={{ padding: "2px 8px", minWidth: 28 }} onClick={() => odobratPrilohu(nazov, p.nazov)}>–</button>
+                                          <span style={{ minWidth: 16, textAlign: "center" }}>{cnt}</span>
+                                        </>
+                                      )}
+                                      <button className="k-btn" style={{ padding: "2px 8px", minWidth: 28 }} onClick={() => pridajPrilohu(nazov, p.nazov)}>+</button>
+                                    </div>
+                                  </div>
+                                );
+                              })}
                             </div>
                           )}
                         </div>
+                      );
+                    })}
+                  </div>
+                  <div className="row" style={{ borderBottom: "none", paddingTop: 10 }}>
+                    <div className="sum">Spolu</div>
+                    <div className="sum">€{spocitajCenu().toFixed(2)}</div>
+                  </div>
+                </>
+              )}
+
+              <div className="k-row" style={{ marginTop: 12 }}>
+                <button className="k-btn" onClick={zrusitObjednavku}>Zrušiť</button>
+                <button
+                  className="k-btn accent"
+                  disabled={!zvolenyVysielac || Object.keys(objednavka).length === 0}
+                  onClick={potvrditObjednavku}
+                >
+                  Potvrdiť objednávku
+                </button>
+              </div>
+              <div className="k-help">Po potvrdení sa vysielač uzamkne.</div>
+            </aside>
+
+            {/* KALKULAČKA */}
+            {(() => {
+              const BANKOVKY = [100, 50, 20, 10, 5];
+              const MINCE = [2, 1, 0.50, 0.20, 0.10, 0.05];
+              const suma = spocitajCenu();
+              const vydaj = Math.round((zaplatene - suma) * 100) / 100;
+              const pridaj = (h) => setZaplatene((p) => Math.round((p + h) * 100) / 100);
+              return (
+                <div className="k-panel">
+                  <div className="k-row" style={{ justifyContent: "space-between", marginBottom: 8 }}>
+                    <strong>Kalkulačka</strong>
+                    <button className="k-btn" onClick={() => setZaplatene(0)}>Reset</button>
+                  </div>
+
+                  <div className="k-row" style={{ flexWrap: "wrap", gap: 4, marginBottom: 6 }}>
+                    {BANKOVKY.map((h) => (
+                      <button key={h} className="k-btn" onClick={() => pridaj(h)}>{h}€</button>
+                    ))}
+                  </div>
+                  <div className="k-row" style={{ flexWrap: "wrap", gap: 4, marginBottom: 10 }}>
+                    {MINCE.map((h) => (
+                      <button key={h} className="k-btn" onClick={() => pridaj(h)}>
+                        {h >= 1 ? `${h}€` : `${Math.round(h * 100)}c`}
+                      </button>
+                    ))}
+                  </div>
+
+                  <div className="k-row" style={{ justifyContent: "space-between" }}>
+                    <div className="k-help">
+                      Zaplatené: <strong>€{zaplatene.toFixed(2)}</strong>
+                    </div>
+                    {zaplatene > 0 && (
+                      <div style={{ fontWeight: 700, color: vydaj >= 0 ? "#16a34a" : "#dc2626" }}>
+                        {vydaj >= 0 ? `Vydať: €${vydaj.toFixed(2)}` : `Chýba: €${Math.abs(vydaj).toFixed(2)}`}
                       </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })()}
+
+            {/* PRIPRAVENÉ OBJEDNÁVKY — desktop tabuľka */}
+            {nevydane.length > 0 && (
+              <div className="k-panel hide-mobile">
+                <div className="k-table-wrap">
+                  <table className="k-table">
+                    <thead>
+                      <tr>
+                        <th>Čas</th>
+                        <th>Objednávka</th>
+                        <th>Suma</th>
+                        <th>Akcia</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {nevydane.map((rec) => {
+                        const pol = rec?.polozky || {};
+                        const items = Object.entries(pol).map(([n, ks]) => `${ks}× ${n}`).join(", ");
+                        return (
+                          <tr key={rec.id} style={{ background: orderColor(rec.objednavkaId || rec.id) }}>
+                            <td title={new Date(rec.completedAt || rec.createdAt || Date.now()).toLocaleString()}>
+                              {timeAgo(rec.completedAt || rec.createdAt)}
+                            </td>
+                            <td><strong>#{rec.vysielac ?? "—"}</strong> — {items || "—"}</td>
+                            <td>{typeof rec.suma === "number" ? rec.suma.toFixed(2) + " €" : rec.suma || "—"}</td>
+                            <td>
+                              <button
+                                className="k-btn k-btn--success"
+                                onClick={() => oznacitPrevzate(rec.id, rec.vysielac ?? null)}
+                              >
+                                Odovzdať
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {/* PRIPRAVENÉ OBJEDNÁVKY — mobilné karty */}
+            {nevydane.length > 0 && (
+              <div className="hide-desktop">
+                <div className="o-cards">
+                  {nevydane.map((rec) => {
+                    const pol = rec?.polozky || {};
+                    return (
+                      <article className="o-card" key={rec.id} style={{ background: orderColor(rec.objednavkaId || rec.id) }}>
+                        <header className="o-head">
+                          <div className="o-id">#{rec.vysielac ?? "—"}</div>
+                          <div className="o-time" title={new Date(rec.completedAt || rec.createdAt || Date.now()).toLocaleString()}>
+                            {timeAgo(rec.completedAt || rec.createdAt)}
+                          </div>
+                        </header>
+                        <div className="o-items">
+                          {Object.entries(pol).map(([n, ks]) => (
+                            <div className="o-item" key={n}>
+                              <span className="o-name">{n}</span>
+                              <span className="o-qty">{ks}×</span>
+                            </div>
+                          ))}
+                          {Object.entries(rec.prilohy || {}).flatMap(([, ps]) =>
+                            Object.entries(ps).map(([pn, pk]) => (
+                              <div className="o-item" key={pn} style={{ opacity: 0.75, paddingLeft: 8 }}>
+                                <span className="o-name">↳ {pn}</span>
+                                <span className="o-qty">{pk}×</span>
+                              </div>
+                            ))
+                          )}
+                          {Object.keys(pol).length === 0 && <div className="o-empty">—</div>}
+                        </div>
+                        <div className="o-meta">
+                          <div className="o-chip">Suma</div>
+                          <div className="o-sum">
+                            {typeof rec.suma === "number" ? rec.suma.toFixed(2) + " €" : rec.suma || "—"}
+                          </div>
+                        </div>
+                        <button
+                          className="o-btn-primary"
+                          onClick={() => oznacitPrevzate(rec.id, rec.vysielac ?? null)}
+                        >
+                          Odovzdať
+                        </button>
+                      </article>
                     );
                   })}
                 </div>
               </div>
             )}
           </div>
-
-          {/* STICKY KOŠÍK */}
-          <aside className="k-panel k-cart">
-            <h3 style={{ marginTop: 0 }}>Moja objednávka</h3>
-            {Object.keys(objednavka).length === 0 ? (
-              <p className="k-help">Žiadne položky. Pridajte z ponuky.</p>
-            ) : (
-              <>
-                <div>
-                  {Object.entries(objednavka).map(([nazov, pocet]) => {
-                    const pol = menu.find((m) => m.nazov === nazov);
-                    const cena = (pol?.cena || 0) * pocet;
-                    return (
-                      <div key={nazov} className="row">
-                        <div style={{ maxWidth: 220 }}>
-                          <strong>{nazov}</strong>{" "}
-                          <span className="k-help">×{pocet}</span>
-                        </div>
-                        <div>€{cena.toFixed(2)}</div>
-                      </div>
-                    );
-                  })}
-                </div>
-                <div className="row" style={{ borderBottom: "none", paddingTop: 10 }}>
-                  <div className="sum">Spolu</div>
-                  <div className="sum">€{spocitajCenu().toFixed(2)}</div>
-                </div>
-
-                <div className="k-row" style={{ marginTop: 12 }}>
-                  <button className="k-btn" onClick={spatKVysielacom}>Späť k vysielačom</button>
-                  <button className="k-btn" onClick={zrusitObjednavku}>Zrušiť objednávku</button>
-                  <button className="k-btn accent" onClick={potvrditObjednavku}>Potvrdiť objednávku</button>
-                </div>
-                <div className="k-help">Po potvrdení sa vysielač uzamkne.</div>
-              </>
-            )}
-          </aside>
         </div>
       </div>
-
-      {/* READY MODAL */}
-      {readyModalOpen && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          className="k-modal-backdrop"
-          style={{
-            position: "fixed", inset: 0, background: "rgba(0,0,0,0.35)",
-            display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50
-          }}
-          onClick={(e) => {
-            if (e.target === e.currentTarget) zavrietReadyModal();
-          }}
-        >
-          <div
-            className="k-modal"
-            style={{
-              background: "#fff", borderRadius: 12, padding: 16, width: "min(680px, 92vw)",
-              boxShadow: "0 10px 30px rgba(0,0,0,0.25)"
-            }}
-          >
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-              <h3 style={{ margin: 0 }}>
-                Vysielač #{readyVysielac} — pripravené na odovzdanie
-              </h3>
-              <button className="k-btn" onClick={zavrietReadyModal} aria-label="Zavrieť">✕</button>
-            </div>
-
-            {!readyRec ? (
-              <p className="k-help">Načítavam objednávku…</p>
-            ) : (
-              <>
-                <div className="k-table-wrap" style={{ maxHeight: 320, overflow: "auto" }}>
-                  <table className="k-table">
-                    <thead>
-                      <tr><th>Položka</th><th>Ks</th></tr>
-                    </thead>
-                    <tbody>
-                      {Object.entries(readyRec.polozky || {}).map(([n, ks]) => (
-                        <tr key={n}><td>{n}</td><td><b>{ks}</b></td></tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-                <div className="k-row" style={{ justifyContent: "space-between", marginTop: 12 }}>
-                  <div className="k-sum">
-                    Suma: <b>{Number(readyRec.suma || 0).toFixed(2)} €</b>
-                  </div>
-                  <div className="k-row">
-                    <button className="k-btn" onClick={zavrietReadyModal}>Zrušiť</button>
-                    <button className="k-btn primary" onClick={odovzdatAktualny}>ODOVZDAŤ</button>
-                  </div>
-                </div>
-              </>
-            )}
-          </div>
-        </div>
-      )}
     </>
   );
 }
