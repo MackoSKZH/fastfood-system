@@ -128,6 +128,13 @@ export default function Obsluha() {
     };
   }, [showInfo, session]);
 
+  function orderColor(id) {
+    let h = 0;
+    const s = String(id || "");
+    for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) & 0xffffffff;
+    return `hsl(${Math.abs(h) % 360}, 50%, 91%)`;
+  }
+
   function timeAgo(ts) {
     const diff = Math.max(1, Math.floor((now - (ts || now)) / 1000));
     if (diff < 60) return `${diff}s`;
@@ -187,12 +194,18 @@ export default function Obsluha() {
                   const items = Object.entries(pol)
                     .map(([n, ks]) => `${ks}× ${n}`)
                     .join(", ");
+                  const prilohy = Object.entries(rec.prilohy || {})
+                    .flatMap(([, ps]) => Object.entries(ps).map(([pn, pk]) => `${pk}× ${pn}`))
+                    .join(", ");
                   return (
-                    <tr key={rec.id}>
+                    <tr key={rec.id} style={{ background: orderColor(rec.objednavkaId || rec.id) }}>
                       <td title={new Date(rec.completedAt || rec.createdAt || Date.now()).toLocaleString()}>
                         {timeAgo(rec.completedAt || rec.createdAt)}
                       </td>
-                      <td><strong>#{rec.vysielac ?? "—"}</strong> — {items || "—"}</td>
+                      <td>
+                        <strong>#{rec.vysielac ?? "—"}</strong> — {items || "—"}
+                        {prilohy && <span className="k-help"> · ↳ {prilohy}</span>}
+                      </td>
                       <td>{rec.vysielac ?? "—"}</td>
                       <td>
                         {typeof rec.suma === "number"
@@ -221,7 +234,7 @@ export default function Obsluha() {
             {nevydane.map((rec) => {
               const pol = rec?.polozky || {};
               return (
-                <article className="o-card" key={rec.id}>
+                <article className="o-card" key={rec.id} style={{ background: orderColor(rec.objednavkaId || rec.id) }}>
                   <header className="o-head">
                     <div className="o-id">#{rec.vysielac ?? "—"}</div>
                     <div
@@ -239,6 +252,14 @@ export default function Obsluha() {
                         <span className="o-qty">{ks}×</span>
                       </div>
                     ))}
+                    {Object.entries(rec.prilohy || {}).flatMap(([, ps]) =>
+                      Object.entries(ps).map(([pn, pk]) => (
+                        <div className="o-item" key={pn} style={{ opacity: 0.75, paddingLeft: 8 }}>
+                          <span className="o-name">↳ {pn}</span>
+                          <span className="o-qty">{pk}×</span>
+                        </div>
+                      ))
+                    )}
                     {Object.keys(pol).length === 0 && <div className="o-empty">—</div>}
                   </div>
 
