@@ -3,10 +3,10 @@ import { useNavigate } from "react-router-dom";
 import { useSession } from "./SessionProvider";
 import "./pages/kiosk.css";
 
-let db, ref, get, set, serverTimestamp;
+let db, ref, get, set;
 try {
     ({ db } = require("./firebase"));
-    ({ ref, get, set, serverTimestamp } = require("firebase/database"));
+    ({ ref, get, set } = require("firebase/database"));
 } catch (e) {}
 
 export default function SessionSelect() {
