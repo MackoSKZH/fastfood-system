@@ -61,6 +61,7 @@ export default function Kuchyna() {
       const presetName = sessionSnap.exists() ? sessionSnap.val()?.preset || "" : "";
 
       let priceMap = {};
+      let prilohapriceMap = {};
       const norm = (s) =>
         (s ?? "")
           .trim()
@@ -83,9 +84,15 @@ export default function Kuchyna() {
           if (!Number.isFinite(cena)) cena = 0;
           priceMap[nazov] = cena;
           priceMap[norm(nazov)] = cena;
+          Object.entries(v?.prilohy || {}).forEach(([pnazov, pv]) => {
+            const pc = typeof pv === "number" ? pv : Number(pv?.cena ?? 0);
+            if (!prilohapriceMap[pnazov]) prilohapriceMap[pnazov] = Number.isFinite(pc) ? pc : 0;
+            if (!prilohapriceMap[norm(pnazov)]) prilohapriceMap[norm(pnazov)] = Number.isFinite(pc) ? pc : 0;
+          });
         });
       }
       const getCena = (nazov) => priceMap[nazov] ?? priceMap[norm(nazov)] ?? 0;
+      const getPrilohaCena = (n) => prilohapriceMap[n] ?? prilohapriceMap[norm(n)] ?? 0;
 
       const logRef = ref(db, `sessions/${session}/log`);
       off = onValue(logRef, (snap) => {
@@ -108,11 +115,20 @@ export default function Kuchyna() {
           Object.entries(pol).forEach(([nazov, ks]) => {
             counts[nazov] = (counts[nazov] || 0) + Number(ks || 0);
           });
+          Object.values(rec?.prilohy || {}).forEach((instancePrilohy) => {
+            Object.entries(instancePrilohy).forEach(([pnazov, count]) => {
+              const k = "↳ " + pnazov;
+              counts[k] = (counts[k] || 0) + Number(count || 0);
+            });
+          });
         });
 
         const byItem = Object.entries(counts)
           .map(([nazov, ks]) => {
-            const cena = Number(getCena(nazov) || 0);
+            const isPriloha = nazov.startsWith("↳ ");
+            const cena = isPriloha
+              ? Number(getPrilohaCena(nazov.slice(2)) || 0)
+              : Number(getCena(nazov) || 0);
             const trzba = ks * cena;
             return { nazov, ks, cena, trzba };
           })
@@ -163,8 +179,9 @@ export default function Kuchyna() {
       Object.entries(o.polozky || {}).forEach(([nazov, pocet]) => {
         sum[nazov] = (sum[nazov] || 0) + Number(pocet || 0);
       });
-      Object.values(o.prilohy || {}).forEach((prilohy) => {
-        Object.entries(prilohy).forEach(([pnazov, pkolicko]) => {
+      // prilohy keys are "nazov||instanceIdx" -> values are { [pnazov]: count }
+      Object.values(o.prilohy || {}).forEach((instancePrilohy) => {
+        Object.entries(instancePrilohy).forEach(([pnazov, pkolicko]) => {
           const k = "↳ " + pnazov;
           sum[k] = (sum[k] || 0) + Number(pkolicko || 0);
         });
@@ -177,7 +194,10 @@ export default function Kuchyna() {
         if (!v) return;
         const base = key.replace(/-\d+$/, "");
         if (base.startsWith("_PR_")) {
-          const k = "↳ " + base.slice(4);
+          // key format: _PR_nazov||instanceIdx||pnazov
+          const parts = base.slice(4).split("||");
+          const pnazov = parts[parts.length - 1];
+          const k = "↳ " + pnazov;
           if (sum[k]) sum[k] = Math.max(0, sum[k] - 1);
         } else {
           if (sum[base]) sum[base] = Math.max(0, sum[base] - 1);
@@ -367,10 +387,12 @@ export default function Kuchyna() {
                   <div key={o.id} className="order-card" style={{ background: orderColor(o.id) }}>
                     <div className="order-head">
                       <div>
-                        <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 2 }}>
+                        <div style={{ fontSize: 28, fontWeight: 900, lineHeight: 1 }}>
                           Objednávka #{waitingOrders.indexOf(o) + 1}
                         </div>
-                        <strong>Vysielač #{o.vysielac}</strong>
+                        <div style={{ fontSize: 15, fontWeight: 600, color: "#374151", marginTop: 2 }}>
+                          Vysielač #{o.vysielac}
+                        </div>
                       </div>
                       <span
                         className="timer"
@@ -383,10 +405,27 @@ export default function Kuchyna() {
 
                     <div className="order-items">
                       {o.polozky &&
-                        Object.entries(o.polozky).flatMap(([nazov, pocet]) => {
-                          const mainItems = Array.from({ length: Number(pocet || 0) }, (_, idx) => {
+                        Object.entries(o.polozky).flatMap(([nazov, pocet]) =>
+                          Array.from({ length: Number(pocet || 0) }, (_, idx) => {
                             const key = `${nazov}-${idx}`;
-                            return (
+                            const instancePrilohy = o.prilohy?.[`${nazov}||${idx}`] || {};
+                            const prilohaItems = Object.entries(instancePrilohy).flatMap(
+                              ([pnazov, pkolicko]) =>
+                                Array.from({ length: Number(pkolicko || 0) }, (_, pidx) => {
+                                  const pkey = `_PR_${nazov}||${idx}||${pnazov}-${pidx}`;
+                                  return (
+                                    <label key={pkey} className="row item" style={{ paddingLeft: 16, opacity: 0.85 }}>
+                                      <span className="name" style={{ fontStyle: "italic" }}>↳ {pnazov}</span>
+                                      <input
+                                        type="checkbox"
+                                        checked={!!checked[o.id]?.[pkey]}
+                                        onChange={() => toggleItem(o.id, pkey)}
+                                      />
+                                    </label>
+                                  );
+                                })
+                            );
+                            return [
                               <label key={key} className="row item">
                                 <span className="name">{nazov}</span>
                                 <input
@@ -394,27 +433,11 @@ export default function Kuchyna() {
                                   checked={!!checked[o.id]?.[key]}
                                   onChange={() => toggleItem(o.id, key)}
                                 />
-                              </label>
-                            );
-                          });
-                          const prilohaItems = Object.entries(o.prilohy?.[nazov] || {}).flatMap(
-                            ([pnazov, pkolicko]) =>
-                              Array.from({ length: Number(pkolicko || 0) }, (_, pidx) => {
-                                const pkey = `_PR_${pnazov}-${pidx}`;
-                                return (
-                                  <label key={pkey} className="row item" style={{ paddingLeft: 16, opacity: 0.85 }}>
-                                    <span className="name" style={{ fontStyle: "italic" }}>↳ {pnazov}</span>
-                                    <input
-                                      type="checkbox"
-                                      checked={!!checked[o.id]?.[pkey]}
-                                      onChange={() => toggleItem(o.id, pkey)}
-                                    />
-                                  </label>
-                                );
-                              })
-                          );
-                          return [...mainItems, ...prilohaItems];
-                        })}
+                              </label>,
+                              ...prilohaItems,
+                            ];
+                          })
+                        )}
                     </div>
                     <div className="sum">Suma: €{(o.suma || 0).toFixed(2)}</div>
 

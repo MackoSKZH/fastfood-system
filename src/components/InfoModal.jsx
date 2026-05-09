@@ -43,6 +43,7 @@ export default function InfoModal({ session, onClose }) {
       const presetName = sSnap.exists() ? sSnap.val()?.preset || "" : "";
 
       let priceMap = {};
+      let prilohapriceMap = {};
       if (presetName) {
         const pSnap = await get(ref(db, `presets/${presetName}`));
         const pData = pSnap.val() || {};
@@ -58,9 +59,15 @@ export default function InfoModal({ session, onClose }) {
           if (!Number.isFinite(cena)) cena = 0;
           priceMap[nazov] = cena;
           priceMap[norm(nazov)] = cena;
+          Object.entries(v?.prilohy || {}).forEach(([pnazov, pv]) => {
+            const pc = typeof pv === "number" ? pv : Number(pv?.cena ?? 0);
+            if (!prilohapriceMap[pnazov]) prilohapriceMap[pnazov] = Number.isFinite(pc) ? pc : 0;
+            if (!prilohapriceMap[norm(pnazov)]) prilohapriceMap[norm(pnazov)] = Number.isFinite(pc) ? pc : 0;
+          });
         });
       }
       const getCena = (n) => priceMap[n] ?? priceMap[norm(n)] ?? 0;
+      const getPrilohaCena = (n) => prilohapriceMap[n] ?? prilohapriceMap[norm(n)] ?? 0;
 
       const logRef = ref(db, `sessions/${session}/log`);
       off = onValue(logRef, (snap) => {
@@ -82,11 +89,21 @@ export default function InfoModal({ session, onClose }) {
           Object.entries(rec?.polozky || {}).forEach(([nazov, ks]) => {
             counts[nazov] = (counts[nazov] || 0) + Number(ks || 0);
           });
+          // prílohy sú { "nazov||idx": { [pnazov]: count } }
+          Object.values(rec?.prilohy || {}).forEach((instancePrilohy) => {
+            Object.entries(instancePrilohy).forEach(([pnazov, count]) => {
+              const k = "↳ " + pnazov;
+              counts[k] = (counts[k] || 0) + Number(count || 0);
+            });
+          });
         });
 
         const byItem = Object.entries(counts)
           .map(([nazov, ks]) => {
-            const cena = Number(getCena(nazov) || 0);
+            const isPriloha = nazov.startsWith("↳ ");
+            const cena = isPriloha
+              ? Number(getPrilohaCena(nazov.slice(2)) || 0)
+              : Number(getCena(nazov) || 0);
             return { nazov, ks, cena, trzba: ks * cena };
           })
           .sort(

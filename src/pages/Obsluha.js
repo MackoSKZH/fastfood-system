@@ -57,6 +57,7 @@ export default function Obsluha() {
       const presetName = sessionSnap.exists() ? sessionSnap.val()?.preset || "" : "";
 
       let priceMap = {};
+      let prilohapriceMap = {};
       const norm = (s) =>
         (s ?? "")
           .trim()
@@ -79,9 +80,15 @@ export default function Obsluha() {
           if (!Number.isFinite(cena)) cena = 0;
           priceMap[nazov] = cena;
           priceMap[norm(nazov)] = cena;
+          Object.entries(v?.prilohy || {}).forEach(([pnazov, pv]) => {
+            const pc = typeof pv === "number" ? pv : Number(pv?.cena ?? 0);
+            if (!prilohapriceMap[pnazov]) prilohapriceMap[pnazov] = Number.isFinite(pc) ? pc : 0;
+            if (!prilohapriceMap[norm(pnazov)]) prilohapriceMap[norm(pnazov)] = Number.isFinite(pc) ? pc : 0;
+          });
         });
       }
       const getCena = (nazov) => priceMap[nazov] ?? priceMap[norm(nazov)] ?? 0;
+      const getPrilohaCena = (n) => prilohapriceMap[n] ?? prilohapriceMap[norm(n)] ?? 0;
 
       const logRef = ref(db, `sessions/${session}/log`);
       off = onValue(logRef, (snap) => {
@@ -104,11 +111,20 @@ export default function Obsluha() {
           Object.entries(pol).forEach(([nazov, ks]) => {
             counts[nazov] = (counts[nazov] || 0) + Number(ks || 0);
           });
+          Object.values(rec?.prilohy || {}).forEach((instancePrilohy) => {
+            Object.entries(instancePrilohy).forEach(([pnazov, count]) => {
+              const k = "↳ " + pnazov;
+              counts[k] = (counts[k] || 0) + Number(count || 0);
+            });
+          });
         });
 
         const byItem = Object.entries(counts)
           .map(([nazov, ks]) => {
-            const cena = Number(getCena(nazov) || 0);
+            const isPriloha = nazov.startsWith("↳ ");
+            const cena = isPriloha
+              ? Number(getPrilohaCena(nazov.slice(2)) || 0)
+              : Number(getCena(nazov) || 0);
             const trzba = ks * cena;
             return { nazov, ks, cena, trzba };
           })
@@ -152,6 +168,18 @@ export default function Obsluha() {
     }
   }
 
+  function expandItems(rec) {
+    const pol = rec?.polozky || {};
+    const prilohy = rec?.prilohy || {};
+    const result = [];
+    Object.entries(pol).forEach(([nazov, pocet]) => {
+      for (let idx = 0; idx < Number(pocet || 0); idx++) {
+        result.push({ nazov, instancePrilohy: prilohy[`${nazov}||${idx}`] || {} });
+      }
+    });
+    return result;
+  }
+
   const nevydane = logZaznamy.filter((z) => !prevzate[z.id]);
 
   if (!session) return null;
@@ -190,21 +218,25 @@ export default function Obsluha() {
               </thead>
               <tbody>
                 {nevydane.map((rec) => {
-                  const pol = rec?.polozky || {};
-                  const items = Object.entries(pol)
-                    .map(([n, ks]) => `${ks}× ${n}`)
-                    .join(", ");
-                  const prilohy = Object.entries(rec.prilohy || {})
-                    .flatMap(([, ps]) => Object.entries(ps).map(([pn, pk]) => `${pk}× ${pn}`))
-                    .join(", ");
+                  const instances = expandItems(rec);
                   return (
                     <tr key={rec.id} style={{ background: orderColor(rec.objednavkaId || rec.id) }}>
                       <td title={new Date(rec.completedAt || rec.createdAt || Date.now()).toLocaleString()}>
                         {timeAgo(rec.completedAt || rec.createdAt)}
                       </td>
                       <td>
-                        <strong>#{rec.vysielac ?? "—"}</strong> — {items || "—"}
-                        {prilohy && <span className="k-help"> · ↳ {prilohy}</span>}
+                        <strong>#{rec.vysielac ?? "—"}</strong>
+                        {instances.length === 0 && " — —"}
+                        {instances.map((item, i) => (
+                          <div key={i}>
+                            <span>{item.nazov}</span>
+                            {Object.entries(item.instancePrilohy).map(([pn, pk]) => (
+                              <div key={pn} style={{ paddingLeft: 10, opacity: 0.75, fontSize: "0.88em" }}>
+                                ↳ {Number(pk) > 1 ? `${pk}× ` : ""}{pn}
+                              </div>
+                            ))}
+                          </div>
+                        ))}
                       </td>
                       <td>{rec.vysielac ?? "—"}</td>
                       <td>
@@ -232,7 +264,7 @@ export default function Obsluha() {
         <section className="k-section hide-desktop">
           <div className="o-cards">
             {nevydane.map((rec) => {
-              const pol = rec?.polozky || {};
+              const instances = expandItems(rec);
               return (
                 <article className="o-card" key={rec.id} style={{ background: orderColor(rec.objednavkaId || rec.id) }}>
                   <header className="o-head">
@@ -246,21 +278,20 @@ export default function Obsluha() {
                   </header>
 
                   <div className="o-items">
-                    {Object.entries(pol).map(([n, ks]) => (
-                      <div className="o-item" key={n}>
-                        <span className="o-name">{n}</span>
-                        <span className="o-qty">{ks}×</span>
+                    {instances.length === 0 && <div className="o-empty">—</div>}
+                    {instances.map((item, i) => (
+                      <div key={i}>
+                        <div className="o-item">
+                          <span className="o-name">{item.nazov}</span>
+                        </div>
+                        {Object.entries(item.instancePrilohy).map(([pn, pk]) => (
+                          <div className="o-item" key={pn} style={{ opacity: 0.75, paddingLeft: 12 }}>
+                            <span className="o-name">↳ {pn}</span>
+                            {Number(pk) > 1 && <span className="o-qty">{pk}×</span>}
+                          </div>
+                        ))}
                       </div>
                     ))}
-                    {Object.entries(rec.prilohy || {}).flatMap(([, ps]) =>
-                      Object.entries(ps).map(([pn, pk]) => (
-                        <div className="o-item" key={pn} style={{ opacity: 0.75, paddingLeft: 8 }}>
-                          <span className="o-name">↳ {pn}</span>
-                          <span className="o-qty">{pk}×</span>
-                        </div>
-                      ))
-                    )}
-                    {Object.keys(pol).length === 0 && <div className="o-empty">—</div>}
                   </div>
 
                   <div className="o-meta">
