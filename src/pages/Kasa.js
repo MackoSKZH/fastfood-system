@@ -26,13 +26,13 @@ export default function Kasa() {
   const [menu, setMenu] = useState([]);
   const [zablokovaneVysielace, setZablokovaneVysielace] = useState({});
   const [zvolenyVysielac, setZvolenyVysielac] = useState(null);
-  const [objednavka, setObjednavka] = useState({});
+  // Each entry: { id: string, nazov: string, prilohy: { [prilohaName]: count } }
+  const [cartItems, setCartItems] = useState([]);
   const [showInfo, setShowInfo] = useState(false);
   const [logZaznamy, setLogZaznamy] = useState([]);
   const [prevzateMap, setPrevzateMap] = useState({});
   const [now, setNow] = useState(Date.now());
   const [zaplatene, setZaplatene] = useState(0);
-  const [objednavkaPrilohy, setObjednavkaPrilohy] = useState({});
 
   const mamAktivnyLock = useRef(false);
   const skipAutoUnlockOnce = useRef(false);
@@ -162,70 +162,68 @@ export default function Kasa() {
   }
 
   async function zrusitObjednavku() {
-    if (Object.keys(objednavka).length > 0) {
+    if (cartItems.length > 0) {
       const ok = window.confirm("Zrušiť rozpracovanú objednávku?");
       if (!ok) return;
     }
-    setObjednavka({});
-    setObjednavkaPrilohy({});
+    setCartItems([]);
     setZvolenyVysielac(null);
     setZaplatene(0);
   }
 
   function pridajPolozku(nazov) {
-    setObjednavka((prev) => ({ ...prev, [nazov]: (prev[nazov] || 0) + 1 }));
+    setCartItems((prev) => [
+      ...prev,
+      { id: `${nazov}-${Date.now()}-${Math.random()}`, nazov, prilohy: {} },
+    ]);
   }
 
   function odobratPolozku(nazov) {
-    setObjednavka((prev) => {
-      const k = { ...prev };
-      if (k[nazov] > 1) k[nazov]--;
-      else delete k[nazov];
-      return k;
+    setCartItems((prev) => {
+      const lastIdx = [...prev].map((x, i) => [x, i]).reverse().find(([x]) => x.nazov === nazov)?.[1];
+      if (lastIdx == null) return prev;
+      return [...prev.slice(0, lastIdx), ...prev.slice(lastIdx + 1)];
     });
   }
 
+  function pridajPrilohu(itemId, prilohaName) {
+    setCartItems((prev) =>
+      prev.map((item) =>
+        item.id !== itemId
+          ? item
+          : { ...item, prilohy: { ...item.prilohy, [prilohaName]: (item.prilohy[prilohaName] || 0) + 1 } }
+      )
+    );
+  }
+
+  function odobratPrilohu(itemId, prilohaName) {
+    setCartItems((prev) =>
+      prev.map((item) => {
+        if (item.id !== itemId) return item;
+        const newPrilohy = { ...item.prilohy };
+        if ((newPrilohy[prilohaName] || 0) > 1) newPrilohy[prilohaName]--;
+        else delete newPrilohy[prilohaName];
+        return { ...item, prilohy: newPrilohy };
+      })
+    );
+  }
+
   function spocitajCenu() {
-    let sum = Object.entries(objednavka).reduce((s, [nazov, pocet]) => {
-      const p = menu.find((m) => m.nazov === nazov);
-      return s + ((p?.cena) || 0) * (pocet || 0);
-    }, 0);
-    Object.entries(objednavkaPrilohy).forEach(([itemName, prilohy]) => {
-      if (!objednavka[itemName]) return;
-      const menuItem = menu.find((m) => m.nazov === itemName);
-      if (!menuItem) return;
-      Object.entries(prilohy).forEach(([prilohaName, count]) => {
-        const pr = menuItem.prilohy?.find((p) => p.nazov === prilohaName);
+    let sum = 0;
+    cartItems.forEach((item) => {
+      const pol = menu.find((m) => m.nazov === item.nazov);
+      sum += pol?.cena || 0;
+      Object.entries(item.prilohy).forEach(([prilohaName, count]) => {
+        const pr = pol?.prilohy?.find((p) => p.nazov === prilohaName);
         sum += (pr?.cena || 0) * count;
       });
     });
     return Math.round(sum * 100) / 100;
   }
 
-  function pridajPrilohu(itemNazov, prilohaName) {
-    setObjednavkaPrilohy((prev) => ({
-      ...prev,
-      [itemNazov]: { ...prev[itemNazov], [prilohaName]: ((prev[itemNazov]?.[prilohaName]) || 0) + 1 },
-    }));
-  }
-
-  function odobratPrilohu(itemNazov, prilohaName) {
-    setObjednavkaPrilohy((prev) => {
-      const item = { ...prev[itemNazov] };
-      if ((item[prilohaName] || 0) > 1) item[prilohaName]--;
-      else delete item[prilohaName];
-      if (Object.keys(item).length === 0) {
-        const next = { ...prev };
-        delete next[itemNazov];
-        return next;
-      }
-      return { ...prev, [itemNazov]: item };
-    });
-  }
-
   async function potvrditObjednavku() {
     try {
-      if (!session || !zvolenyVysielac || Object.keys(objednavka).length === 0) return;
+      if (!session || !zvolenyVysielac || cartItems.length === 0) return;
 
       const lockRef = ref(db, `sessions/${session}/vysielace/${zvolenyVysielac}`);
       const res = await runTransaction(
@@ -247,28 +245,57 @@ export default function Kasa() {
       mamAktivnyLock.current = true;
       try { await onDisconnect(lockRef).remove(); } catch {}
 
-      const filteredPrilohy = {};
-      Object.entries(objednavkaPrilohy).forEach(([k, v]) => {
-        if (objednavka[k] && Object.keys(v).length > 0) filteredPrilohy[k] = v;
+      // Aggregate polozky: { [nazov]: count }
+      const polozky = {};
+      cartItems.forEach((item) => {
+        polozky[item.nazov] = (polozky[item.nazov] || 0) + 1;
       });
 
-      const newRef = push(ref(db, `sessions/${session}/objednavky`));
-      await set(newRef, {
-        vysielac: zvolenyVysielac,
-        polozky: objednavka,
-        ...(Object.keys(filteredPrilohy).length > 0 ? { prilohy: filteredPrilohy } : {}),
-        suma: spocitajCenu(),
-        status: "waiting",
-        timestamp: Date.now(),
+      // Prilohy indexed by "nazov||instanceIdx" for per-unit distinction
+      const prilohy = {};
+      const nameCount = {};
+      cartItems.forEach((item) => {
+        const idx = nameCount[item.nazov] || 0;
+        nameCount[item.nazov] = idx + 1;
+        if (Object.keys(item.prilohy).length > 0) {
+          prilohy[`${item.nazov}||${idx}`] = item.prilohy;
+        }
       });
 
-      try { await onDisconnect(lockRef).cancel(); } catch {}
-      await set(lockRef, true);
-      mamAktivnyLock.current = true;
+      const isExpress = VIP_VYSIELACE.includes(String(zvolenyVysielac));
+      const now = Date.now();
+
+      if (isExpress) {
+        // Expresná objednávka – preskočí kuchyňu, ide rovno ako ready
+        const newLog = push(ref(db, `sessions/${session}/log`));
+        await set(newLog, {
+          vysielac: zvolenyVysielac,
+          polozky,
+          ...(Object.keys(prilohy).length > 0 ? { prilohy } : {}),
+          suma: spocitajCenu(),
+          completedAt: now,
+          createdAt: now,
+        });
+        try { await onDisconnect(lockRef).cancel(); } catch {}
+        await set(lockRef, "ready");
+        mamAktivnyLock.current = false;
+      } else {
+        const newRef = push(ref(db, `sessions/${session}/objednavky`));
+        await set(newRef, {
+          vysielac: zvolenyVysielac,
+          polozky,
+          ...(Object.keys(prilohy).length > 0 ? { prilohy } : {}),
+          suma: spocitajCenu(),
+          status: "waiting",
+          timestamp: now,
+        });
+        try { await onDisconnect(lockRef).cancel(); } catch {}
+        await set(lockRef, true);
+        mamAktivnyLock.current = true;
+      }
 
       skipAutoUnlockOnce.current = true;
-      setObjednavka({});
-      setObjednavkaPrilohy({});
+      setCartItems([]);
       setZvolenyVysielac(null);
       setZaplatene(0);
     } catch (err) {
@@ -331,18 +358,19 @@ export default function Kasa() {
               <div className="k-menu">
                 {menu.length === 0 && <i>Menu je prázdne.</i>}
                 {menu.map((p) => {
-                  const count = objednavka[p.nazov] || 0;
+                  const count = cartItems.filter((x) => x.nazov === p.nazov).length;
                   return (
-                    <div className="k-card" key={p.nazov}>
+                    <div className={`k-card${count > 0 ? " in-cart" : ""}`} key={p.nazov}>
                       <div className="name">{p.nazov}</div>
                       <div className="price">€{p.cena.toFixed(2)}</div>
                       <div className="actions">
-                        <button className="k-btn primary" onClick={() => pridajPolozku(p.nazov)}>Pridať</button>
-                        {count > 0 && (
+                        {count === 0 ? (
+                          <button className="k-card-add" onClick={() => pridajPolozku(p.nazov)}>Pridať</button>
+                        ) : (
                           <div className="k-qty">
-                            <button className="k-btn" onClick={() => odobratPolozku(p.nazov)} aria-label="Odobrať">–</button>
+                            <button onClick={() => odobratPolozku(p.nazov)} aria-label="Odobrať">–</button>
                             <strong>{count}</strong>
-                            <button className="k-btn" onClick={() => pridajPolozku(p.nazov)} aria-label="Pridať">+</button>
+                            <button onClick={() => pridajPolozku(p.nazov)} aria-label="Pridať">+</button>
                           </div>
                         )}
                       </div>
@@ -402,39 +430,51 @@ export default function Kasa() {
                 </div>
               </div>
 
-              {Object.keys(objednavka).length === 0 ? (
+              {cartItems.length === 0 ? (
                 <p className="k-help">Žiadne položky. Pridajte z ponuky.</p>
               ) : (
                 <>
                   <div>
-                    {Object.entries(objednavka).map(([nazov, pocet]) => {
-                      const pol = menu.find((m) => m.nazov === nazov);
-                      const cena = (pol?.cena || 0) * pocet;
+                    {cartItems.map((item, globalIdx) => {
+                      const pol = menu.find((m) => m.nazov === item.nazov);
+                      const cena = pol?.cena || 0;
                       const dostupnePrilohy = pol?.prilohy || [];
+                      const sameNameBefore = cartItems.slice(0, globalIdx).filter((x) => x.nazov === item.nazov).length;
+                      const totalOfName = cartItems.filter((x) => x.nazov === item.nazov).length;
+                      const label = totalOfName > 1 ? `${item.nazov} #${sameNameBefore + 1}` : item.nazov;
                       return (
-                        <div key={nazov}>
+                        <div key={item.id} style={{ marginBottom: 8, borderBottom: "1px solid #f0f0f0", paddingBottom: 6 }}>
                           <div className="row">
                             <div style={{ maxWidth: 220 }}>
-                              <strong>{nazov}</strong>{" "}
-                              <span className="k-help">×{pocet}</span>
+                              <strong>{label}</strong>
                             </div>
-                            <div>€{cena.toFixed(2)}</div>
+                            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                              <span>€{cena.toFixed(2)}</span>
+                              <button
+                                className="k-btn"
+                                style={{ padding: "2px 8px", minWidth: 28 }}
+                                onClick={() => odobratPolozku(item.nazov)}
+                                aria-label="Odobrať"
+                              >
+                                –
+                              </button>
+                            </div>
                           </div>
                           {dostupnePrilohy.length > 0 && (
-                            <div style={{ paddingLeft: 12, marginBottom: 4 }}>
+                            <div style={{ paddingLeft: 12, marginTop: 2 }}>
                               {dostupnePrilohy.map((p) => {
-                                const cnt = objednavkaPrilohy[nazov]?.[p.nazov] || 0;
+                                const cnt = item.prilohy[p.nazov] || 0;
                                 return (
                                   <div key={p.nazov} className="k-row" style={{ justifyContent: "space-between", padding: "2px 0" }}>
-                                    <span className="k-help">↳ {p.nazov} <span style={{ color: "#6b7280" }}>€{p.cena.toFixed(2)}</span></span>
+                                    <span style={{ fontSize: 14, fontWeight: 600 }}>↳ {p.nazov} <span style={{ color: "#6b7280", fontWeight: 400 }}>€{p.cena.toFixed(2)}</span></span>
                                     <div className="k-row" style={{ gap: 4 }}>
                                       {cnt > 0 && (
                                         <>
-                                          <button className="k-btn" style={{ padding: "2px 8px", minWidth: 28 }} onClick={() => odobratPrilohu(nazov, p.nazov)}>–</button>
+                                          <button className="k-btn" style={{ padding: "2px 8px", minWidth: 28 }} onClick={() => odobratPrilohu(item.id, p.nazov)}>–</button>
                                           <span style={{ minWidth: 16, textAlign: "center" }}>{cnt}</span>
                                         </>
                                       )}
-                                      <button className="k-btn" style={{ padding: "2px 8px", minWidth: 28 }} onClick={() => pridajPrilohu(nazov, p.nazov)}>+</button>
+                                      <button className="k-btn" style={{ padding: "2px 8px", minWidth: 28 }} onClick={() => pridajPrilohu(item.id, p.nazov)}>+</button>
                                     </div>
                                   </div>
                                 );
@@ -456,7 +496,7 @@ export default function Kasa() {
                 <button className="k-btn" onClick={zrusitObjednavku}>Zrušiť</button>
                 <button
                   className="k-btn accent"
-                  disabled={!zvolenyVysielac || Object.keys(objednavka).length === 0}
+                  disabled={!zvolenyVysielac || cartItems.length === 0}
                   onClick={potvrditObjednavku}
                 >
                   Potvrdiť objednávku
@@ -523,12 +563,18 @@ export default function Kasa() {
                       {nevydane.map((rec) => {
                         const pol = rec?.polozky || {};
                         const items = Object.entries(pol).map(([n, ks]) => `${ks}× ${n}`).join(", ");
+                        const prilohy = Object.values(rec.prilohy || {})
+                          .flatMap((ps) => Object.entries(ps).map(([pn, pk]) => `${pk}× ${pn}`))
+                          .join(", ");
                         return (
                           <tr key={rec.id} style={{ background: orderColor(rec.objednavkaId || rec.id) }}>
                             <td title={new Date(rec.completedAt || rec.createdAt || Date.now()).toLocaleString()}>
                               {timeAgo(rec.completedAt || rec.createdAt)}
                             </td>
-                            <td><strong>#{rec.vysielac ?? "—"}</strong> — {items || "—"}</td>
+                            <td>
+                              <strong>#{rec.vysielac ?? "—"}</strong> — {items || "—"}
+                              {prilohy && <span className="k-help"> · ↳ {prilohy}</span>}
+                            </td>
                             <td>{typeof rec.suma === "number" ? rec.suma.toFixed(2) + " €" : rec.suma || "—"}</td>
                             <td>
                               <button
@@ -568,7 +614,7 @@ export default function Kasa() {
                               <span className="o-qty">{ks}×</span>
                             </div>
                           ))}
-                          {Object.entries(rec.prilohy || {}).flatMap(([, ps]) =>
+                          {Object.values(rec.prilohy || {}).flatMap((ps) =>
                             Object.entries(ps).map(([pn, pk]) => (
                               <div className="o-item" key={pn} style={{ opacity: 0.75, paddingLeft: 8 }}>
                                 <span className="o-name">↳ {pn}</span>
