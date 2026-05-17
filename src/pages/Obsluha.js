@@ -225,8 +225,8 @@ export default function Obsluha() {
                         {timeAgo(rec.completedAt || rec.createdAt)}
                       </td>
                       <td>
-                        <strong>#{rec.vysielac ?? "—"}</strong>
-                        {instances.length === 0 && " — —"}
+                        <div style={{ fontSize: "0.82em", color: "#6b7280", marginBottom: 2 }}>Objednávka #{rec.orderNumber ?? "—"} · Pípač #{rec.vysielac ?? "—"}</div>
+                        {instances.length === 0 && "—"}
                         {instances.map((item, i) => (
                           <div key={i}>
                             <span>{item.nazov}</span>
@@ -268,7 +268,10 @@ export default function Obsluha() {
               return (
                 <article className="o-card" key={rec.id} style={{ background: orderColor(rec.objednavkaId || rec.id) }}>
                   <header className="o-head">
-                    <div className="o-id">#{rec.vysielac ?? "—"}</div>
+                    <div>
+                      <div className="o-id">Pípač #{rec.vysielac ?? "—"}</div>
+                      <div style={{ fontSize: "0.8em", color: "#6b7280", marginTop: 1 }}>Objednávka #{rec.orderNumber ?? "—"}</div>
+                    </div>
                     <div
                       className="o-time"
                       title={new Date(rec.completedAt || rec.createdAt || Date.now()).toLocaleString()}

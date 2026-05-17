@@ -277,6 +277,7 @@ export default function Kuchyna() {
       await set(newLog, {
         objednavkaId: order.id,
         vysielac: order.vysielac,
+        ...(order.orderNumber != null ? { orderNumber: order.orderNumber } : {}),
         polozky: order.polozky,
         ...(order.prilohy ? { prilohy: order.prilohy } : {}),
         suma: order.suma || 0,
@@ -388,10 +389,19 @@ export default function Kuchyna() {
                     <div className="order-head">
                       <div>
                         <div style={{ fontSize: 28, fontWeight: 900, lineHeight: 1 }}>
-                          Objednávka #{waitingOrders.indexOf(o) + 1}
+                          Pípač #{o.vysielac}
                         </div>
-                        <div style={{ fontSize: 15, fontWeight: 600, color: "#374151", marginTop: 2 }}>
-                          Vysielač #{o.vysielac}
+                        <div style={{
+                          fontSize: 17,
+                          fontWeight: 800,
+                          color: "#fff",
+                          background: "#2563eb",
+                          borderRadius: 6,
+                          padding: "2px 8px",
+                          display: "inline-block",
+                          marginTop: 4,
+                        }}>
+                          Objednávka #{o.orderNumber ?? (waitingOrders.indexOf(o) + 1)}
                         </div>
                       </div>
                       <span
