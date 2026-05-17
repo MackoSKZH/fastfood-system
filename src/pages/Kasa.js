@@ -265,11 +265,20 @@ export default function Kasa() {
       const isExpress = VIP_VYSIELACE.includes(String(zvolenyVysielac));
       const now = Date.now();
 
+      // Atomicky získaj ďalšie číslo objednávky (1–100, cyklicky)
+      const counterRef = ref(db, `sessions/${session}/orderCounter`);
+      const counterRes = await runTransaction(counterRef, (current) => {
+        if (current === null || current >= 100) return 1;
+        return current + 1;
+      });
+      const orderNumber = counterRes.snapshot.val();
+
       if (isExpress) {
         // Expresná objednávka – preskočí kuchyňu, ide rovno ako ready
         const newLog = push(ref(db, `sessions/${session}/log`));
         await set(newLog, {
           vysielac: zvolenyVysielac,
+          orderNumber,
           polozky,
           ...(Object.keys(prilohy).length > 0 ? { prilohy } : {}),
           suma: spocitajCenu(),
@@ -283,6 +292,7 @@ export default function Kasa() {
         const newRef = push(ref(db, `sessions/${session}/objednavky`));
         await set(newRef, {
           vysielac: zvolenyVysielac,
+          orderNumber,
           polozky,
           ...(Object.keys(prilohy).length > 0 ? { prilohy } : {}),
           suma: spocitajCenu(),
@@ -572,8 +582,8 @@ export default function Kasa() {
                               {timeAgo(rec.completedAt || rec.createdAt)}
                             </td>
                             <td>
-                              <strong>#{rec.vysielac ?? "—"}</strong> — {items || "—"}
-                              {prilohy && <span className="k-help"> · ↳ {prilohy}</span>}
+                              <span style={{ fontSize: "0.82em", color: "#6b7280" }}>Objednávka #{rec.orderNumber ?? "—"} · Pípač #{rec.vysielac ?? "—"}</span>
+                              <div>{items || "—"}{prilohy && <span className="k-help"> · ↳ {prilohy}</span>}</div>
                             </td>
                             <td>{typeof rec.suma === "number" ? rec.suma.toFixed(2) + " €" : rec.suma || "—"}</td>
                             <td>
@@ -602,7 +612,10 @@ export default function Kasa() {
                     return (
                       <article className="o-card" key={rec.id} style={{ background: orderColor(rec.objednavkaId || rec.id) }}>
                         <header className="o-head">
-                          <div className="o-id">#{rec.vysielac ?? "—"}</div>
+                          <div>
+                            <div className="o-id">Pípač #{rec.vysielac ?? "—"}</div>
+                            <div style={{ fontSize: "0.8em", color: "#6b7280", marginTop: 1 }}>Objednávka #{rec.orderNumber ?? "—"}</div>
+                          </div>
                           <div className="o-time" title={new Date(rec.completedAt || rec.createdAt || Date.now()).toLocaleString()}>
                             {timeAgo(rec.completedAt || rec.createdAt)}
                           </div>
