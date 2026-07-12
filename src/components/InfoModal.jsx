@@ -75,6 +75,7 @@ export default function InfoModal({ session, onClose }) {
         let totalOrders = 0;
         let totalRevenue = 0;
         const counts = {};
+        const prilohyByParent = {};
         let from = null,
           to = null;
 
@@ -89,29 +90,67 @@ export default function InfoModal({ session, onClose }) {
           Object.entries(rec?.polozky || {}).forEach(([nazov, ks]) => {
             counts[nazov] = (counts[nazov] || 0) + Number(ks || 0);
           });
-          // prílohy sú { "nazov||idx": { [pnazov]: count } }
-          Object.values(rec?.prilohy || {}).forEach((instancePrilohy) => {
+          // prílohy sú { "nazov||idx": { [pnazov]: count } } – kľúč pred "||" je názov položky, ku ktorej patria
+          Object.entries(rec?.prilohy || {}).forEach(([key, instancePrilohy]) => {
+            const parentNazov = key.split("||")[0];
+            if (!prilohyByParent[parentNazov]) prilohyByParent[parentNazov] = {};
             Object.entries(instancePrilohy).forEach(([pnazov, count]) => {
-              const k = "↳ " + pnazov;
-              counts[k] = (counts[k] || 0) + Number(count || 0);
+              prilohyByParent[parentNazov][pnazov] =
+                (prilohyByParent[parentNazov][pnazov] || 0) + Number(count || 0);
             });
           });
         });
 
-        const byItem = Object.entries(counts)
-          .map(([nazov, ks]) => {
-            const isPriloha = nazov.startsWith("↳ ");
-            const cena = isPriloha
-              ? Number(getPrilohaCena(nazov.slice(2)) || 0)
-              : Number(getCena(nazov) || 0);
-            return { nazov, ks, cena, trzba: ks * cena };
-          })
-          .sort(
+        const makeRow = (nazov, ks, isPriloha) => {
+          const cena = isPriloha
+            ? Number(getPrilohaCena(nazov) || 0)
+            : Number(getCena(nazov) || 0);
+          return {
+            nazov: isPriloha ? "↳ " + nazov : nazov,
+            ks,
+            cena,
+            trzba: ks * cena,
+          };
+        };
+        const sortRows = (rows) =>
+          rows.sort(
             (a, b) =>
               b.trzba - a.trzba ||
               b.ks - a.ks ||
               a.nazov.localeCompare(b.nazov, "sk")
           );
+
+        const mainRows = Object.entries(counts)
+          .map(([nazov, ks]) => ({
+            parent: nazov,
+            row: makeRow(nazov, ks, false),
+          }))
+          .sort(
+            (a, b) =>
+              b.row.trzba - a.row.trzba ||
+              b.row.ks - a.row.ks ||
+              a.row.nazov.localeCompare(b.row.nazov, "sk")
+          );
+
+        const byItem = [];
+        const usedParents = new Set();
+        mainRows.forEach(({ parent, row }) => {
+          byItem.push(row);
+          usedParents.add(parent);
+          const prilohy = prilohyByParent[parent];
+          if (prilohy) {
+            sortRows(
+              Object.entries(prilohy).map(([pnazov, ks]) => makeRow(pnazov, ks, true))
+            ).forEach((r) => byItem.push(r));
+          }
+        });
+        // prílohy, ktorých rodičovská položka sa v prehľade nenašla (napr. bola medzičasom premenovaná)
+        Object.entries(prilohyByParent).forEach(([parent, prilohy]) => {
+          if (usedParents.has(parent)) return;
+          sortRows(
+            Object.entries(prilohy).map(([pnazov, ks]) => makeRow(pnazov, ks, true))
+          ).forEach((r) => byItem.push(r));
+        });
 
         setStats({ totalOrders, totalRevenue, byItem, from, to });
       });
@@ -159,8 +198,8 @@ export default function InfoModal({ session, onClose }) {
               </tr>
             </thead>
             <tbody>
-              {(stats?.byItem || []).map((r) => (
-                <tr key={r.nazov}>
+              {(stats?.byItem || []).map((r, i) => (
+                <tr key={`${r.nazov}-${i}`}>
                   <td>{r.nazov}</td>
                   <td style={{ textAlign: "right" }}>{r.ks}</td>
                   <td style={{ textAlign: "right" }}>€{(r.cena || 0).toFixed(2)}</td>

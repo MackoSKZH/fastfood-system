@@ -10,6 +10,7 @@ export default function Obsluha() {
   const { sessionCode: session } = useSession();
   const [logZaznamy, setLogZaznamy] = useState([]);
   const [prevzate, setPrevzate] = useState({});
+  const [riesene, setRiesene] = useState({});
   const [now, setNow] = useState(Date.now());
 
   const [showInfo, setShowInfo] = useState(false);
@@ -42,9 +43,13 @@ export default function Obsluha() {
     const offPrev = onValue(ref(db, `sessions/${session}/prevzate`), (s) => {
       setPrevzate(s.val() || {});
     });
+    const offRiesene = onValue(ref(db, `sessions/${session}/riesene`), (s) => {
+      setRiesene(s.val() || {});
+    });
     return () => {
       offLog();
       offPrev();
+      offRiesene();
     };
   }, [session]);
 
@@ -163,9 +168,15 @@ export default function Obsluha() {
   async function oznacitPrevzate(id, vys = null) {
     if (!session) return;
     await set(ref(db, `sessions/${session}/prevzate/${id}`), true);
+    await set(ref(db, `sessions/${session}/riesene/${id}`), null);
     if (vys != null) {
       await set(ref(db, `sessions/${session}/vysielace/${vys}`), null);
     }
+  }
+
+  async function toggleRiesene(id) {
+    if (!session) return;
+    await set(ref(db, `sessions/${session}/riesene/${id}`), riesene[id] ? null : true);
   }
 
   function expandItems(rec) {
@@ -225,7 +236,14 @@ export default function Obsluha() {
                         {timeAgo(rec.completedAt || rec.createdAt)}
                       </td>
                       <td>
-                        <div style={{ fontSize: "0.82em", color: "#6b7280", marginBottom: 2 }}>Objednávka #{rec.orderNumber ?? "—"} · Pípač #{rec.vysielac ?? "—"}</div>
+                        <div style={{ fontSize: "0.82em", color: "#6b7280", marginBottom: 2 }}>
+                          <span
+                            className={`status-dot ${riesene[rec.id] ? "status-dot--busy" : "status-dot--free"}`}
+                            title={riesene[rec.id] ? "Niekto to už rieši – klikni pre zrušenie" : "Nikto to nerieši – klikni, ak to preberáš"}
+                            onClick={() => toggleRiesene(rec.id)}
+                          />
+                          Objednávka #{rec.orderNumber ?? "—"} · Pípač #{rec.vysielac ?? "—"}
+                        </div>
                         {instances.length === 0 && "—"}
                         {instances.map((item, i) => (
                           <div key={i}>
@@ -269,7 +287,14 @@ export default function Obsluha() {
                 <article className="o-card" key={rec.id} style={{ background: orderColor(rec.objednavkaId || rec.id) }}>
                   <header className="o-head">
                     <div>
-                      <div className="o-id">Pípač #{rec.vysielac ?? "—"}</div>
+                      <div className="o-id">
+                        <span
+                          className={`status-dot ${riesene[rec.id] ? "status-dot--busy" : "status-dot--free"}`}
+                          title={riesene[rec.id] ? "Niekto to už rieši – klikni pre zrušenie" : "Nikto to nerieši – klikni, ak to preberáš"}
+                          onClick={() => toggleRiesene(rec.id)}
+                        />
+                        Pípač #{rec.vysielac ?? "—"}
+                      </div>
                       <div style={{ fontSize: "0.8em", color: "#6b7280", marginTop: 1 }}>Objednávka #{rec.orderNumber ?? "—"}</div>
                     </div>
                     <div

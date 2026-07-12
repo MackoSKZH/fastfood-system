@@ -3,6 +3,7 @@ import { db } from "../firebase";
 import { ref, set, onValue, remove } from "firebase/database";
 import { useNavigate } from "react-router-dom";
 import "./kiosk.css";
+import { ITEM_COLORS } from "./Kasa";
 
 export default function Presety() {
   const navigate = useNavigate();
@@ -15,6 +16,7 @@ export default function Presety() {
   const [novyPresetOpen, setNovyPresetOpen] = useState(false);
   const [expandedItem, setExpandedItem] = useState(null);
   const [novaPriloha, setNovaPriloha] = useState({ nazov: "", cena: "" });
+  const [pickerOpenFor, setPickerOpenFor] = useState(null);
 
   useEffect(() => {
     const off = onValue(ref(db, "presets"), (snap) => setPresety(snap.val() || {}));
@@ -36,6 +38,7 @@ export default function Presety() {
       .map(([nazov, v]) => ({
         nazov,
         cena: Number(v?.cena ?? 0),
+        farba: (v?.farba != null) ? Number(v.farba) : null,
         prilohy: Object.entries(v?.prilohy || {})
           .map(([pn, pv]) => ({ nazov: pn, cena: Number(pv?.cena ?? 0) }))
           .sort((a, b) => a.nazov.localeCompare(b.nazov, "sk")),
@@ -113,6 +116,18 @@ export default function Presety() {
     }
   }
 
+  async function ulozitFarbu(itemNazov, idx) {
+    try {
+      if (idx == null) {
+        await remove(ref(db, `presets/${vybranyPreset}/${itemNazov}/farba`));
+      } else {
+        await set(ref(db, `presets/${vybranyPreset}/${itemNazov}/farba`), idx);
+      }
+    } catch (err) {
+      alert("Farbu sa nepodarilo uložiť.");
+    }
+  }
+
   async function pridatPrilohu(itemNazov) {
     const nazov = trimText(novaPriloha.nazov);
     const parsed = parseFloat(String(novaPriloha.cena).replace(",", "."));
@@ -139,6 +154,56 @@ export default function Presety() {
   function toggleExpand(nazov) {
     setExpandedItem((prev) => (prev === nazov ? null : nazov));
     setNovaPriloha({ nazov: "", cena: "" });
+  }
+
+  function ColorPickerToggle({ nazov, current }) {
+    const isOpen = pickerOpenFor === nazov;
+    const col = current != null ? ITEM_COLORS[current] : null;
+    return (
+      <div style={{ position: "relative", display: "inline-block" }}>
+        <div
+          onClick={() => setPickerOpenFor(isOpen ? null : nazov)}
+          title="Vybrať farbu"
+          style={{
+            width: 30, height: 30, borderRadius: 7, cursor: "pointer",
+            background: col ? col.bg : "#f3f4f6",
+            border: col ? `2px solid ${col.border}` : "2px dashed #d1d5db",
+            boxSizing: "border-box",
+          }}
+        />
+        {isOpen && (
+          <div style={{
+            position: "absolute", top: 36, left: 0, zIndex: 50,
+            background: "#fff", border: "1px solid #e5e7eb", borderRadius: 10,
+            padding: 8, boxShadow: "0 4px 16px rgba(0,0,0,.14)",
+            display: "flex", flexWrap: "wrap", gap: 5, width: 172,
+          }}>
+            <div
+              onClick={() => { ulozitFarbu(nazov, null); setPickerOpenFor(null); }}
+              title="Bez farby"
+              style={{
+                width: 24, height: 24, borderRadius: 5, cursor: "pointer",
+                background: "#f3f4f6", border: "2px dashed #d1d5db",
+                boxSizing: "border-box",
+              }}
+            />
+            {ITEM_COLORS.map((c, i) => (
+              <div
+                key={i}
+                onClick={() => { ulozitFarbu(nazov, i); setPickerOpenFor(null); }}
+                title={`Farba ${i + 1}`}
+                style={{
+                  width: 24, height: 24, borderRadius: 5, cursor: "pointer",
+                  background: c.bg,
+                  border: current === i ? `3px solid ${c.btn}` : `1px solid ${c.border}`,
+                  boxSizing: "border-box",
+                }}
+              />
+            ))}
+          </div>
+        )}
+      </div>
+    );
   }
 
   function renderPrilohyPanel(item) {
@@ -289,6 +354,7 @@ export default function Presety() {
                           <tr>
                             <th>Položka</th>
                             <th style={{ width: 160 }}>Cena</th>
+                            <th style={{ width: 180 }}>Farba</th>
                             <th style={{ width: 280 }}></th>
                           </tr>
                         </thead>
@@ -317,6 +383,9 @@ export default function Presety() {
                                     ) : (
                                       <>€{cena.toFixed(2)}</>
                                     )}
+                                  </td>
+                                  <td>
+                                    <ColorPickerToggle nazov={nazov} current={item.farba} />
                                   </td>
                                   <td>
                                     <div className="k-row">
@@ -385,6 +454,9 @@ export default function Presety() {
                               </div>
                             )}
 
+                            <div style={{ marginTop: 8 }}>
+                              <ColorPickerToggle nazov={nazov} current={item.farba} />
+                            </div>
                             <div className="k-row" style={{ marginTop: 10, flexWrap: "wrap" }}>
                               {editing ? (
                                 <>

@@ -17,6 +17,26 @@ import { useSession } from "../SessionProvider";
 
 const VIP_VYSIELACE = ["01", "02", "03", "04"];
 
+export const ITEM_COLORS = [
+  { bg: '#FEF3C7', border: '#F59E0B', btn: '#D97706' },
+  { bg: '#DBEAFE', border: '#60A5FA', btn: '#2563EB' },
+  { bg: '#D1FAE5', border: '#34D399', btn: '#059669' },
+  { bg: '#FCE7F3', border: '#F472B6', btn: '#DB2777' },
+  { bg: '#EDE9FE', border: '#A78BFA', btn: '#7C3AED' },
+  { bg: '#FEE2E2', border: '#FCA5A5', btn: '#DC2626' },
+  { bg: '#CCFBF1', border: '#2DD4BF', btn: '#0F766E' },
+  { bg: '#FFEDD5', border: '#FB923C', btn: '#EA580C' },
+  { bg: '#E0F2FE', border: '#38BDF8', btn: '#0284C7' },
+  { bg: '#F3E8FF', border: '#C084FC', btn: '#9333EA' },
+  { bg: '#DCFCE7', border: '#4ADE80', btn: '#16A34A' },
+  { bg: '#FEF9C3', border: '#FDE047', btn: '#CA8A04' },
+];
+
+function itemColorFn(farba) {
+  if (farba != null && farba >= 0 && farba < ITEM_COLORS.length) return ITEM_COLORS[farba];
+  return null;
+}
+
 export default function Kasa() {
   const navigate = useNavigate();
   const { sessionCode: session } = useSession();
@@ -31,6 +51,7 @@ export default function Kasa() {
   const [showInfo, setShowInfo] = useState(false);
   const [logZaznamy, setLogZaznamy] = useState([]);
   const [prevzateMap, setPrevzateMap] = useState({});
+  const [rieseneMap, setRieseneMap] = useState({});
   const [now, setNow] = useState(Date.now());
   const [zaplatene, setZaplatene] = useState(0);
 
@@ -79,12 +100,21 @@ export default function Kasa() {
   }, [session]);
 
   useEffect(() => {
+    if (!session) return;
+    const off = onValue(ref(db, `sessions/${session}/riesene`), (s) => {
+      setRieseneMap(s.val() || {});
+    });
+    return () => off();
+  }, [session]);
+
+  useEffect(() => {
     if (!preset) return;
     const off = onValue(ref(db, `presets/${preset}`), (snap) => {
       const data = snap.val() || {};
       setMenu(Object.entries(data).map(([nazov, v]) => ({
         nazov,
         cena: Number((v && v.cena) ?? 0),
+        farba: (v?.farba != null) ? Number(v.farba) : null,
         prilohy: Object.entries(v?.prilohy || {})
           .map(([pn, pv]) => ({ nazov: pn, cena: Number(pv?.cena ?? 0) }))
           .sort((a, b) => a.nazov.localeCompare(b.nazov, "sk")),
@@ -156,9 +186,15 @@ export default function Kasa() {
   async function oznacitPrevzate(id, vys = null) {
     if (!session) return;
     await set(ref(db, `sessions/${session}/prevzate/${id}`), true);
+    await set(ref(db, `sessions/${session}/riesene/${id}`), null);
     if (vys != null) {
       await set(ref(db, `sessions/${session}/vysielace/${vys}`), null);
     }
+  }
+
+  async function toggleRiesene(id) {
+    if (!session) return;
+    await set(ref(db, `sessions/${session}/riesene/${id}`), rieseneMap[id] ? null : true);
   }
 
   async function zrusitObjednavku() {
@@ -369,8 +405,13 @@ export default function Kasa() {
                 {menu.length === 0 && <i>Menu je prázdne.</i>}
                 {menu.map((p) => {
                   const count = cartItems.filter((x) => x.nazov === p.nazov).length;
+                  const col = itemColorFn(p.farba);
                   return (
-                    <div className={`k-card${count > 0 ? " in-cart" : ""}`} key={p.nazov}>
+                    <div
+                      className={`k-card${count > 0 ? " in-cart" : ""}`}
+                      key={p.nazov}
+                      style={col ? { '--ic-bg': col.bg, '--ic-border': col.border, '--ic-btn': col.btn } : undefined}
+                    >
                       <div className="name">{p.nazov}</div>
                       <div className="price">€{p.cena.toFixed(2)}</div>
                       <div className="actions">
@@ -582,6 +623,11 @@ export default function Kasa() {
                               {timeAgo(rec.completedAt || rec.createdAt)}
                             </td>
                             <td>
+                              <span
+                                className={`status-dot ${rieseneMap[rec.id] ? "status-dot--busy" : "status-dot--free"}`}
+                                title={rieseneMap[rec.id] ? "Niekto to už rieši – klikni pre zrušenie" : "Nikto to nerieši – klikni, ak to preberáš"}
+                                onClick={() => toggleRiesene(rec.id)}
+                              />
                               <span style={{ fontSize: "0.82em", color: "#6b7280" }}>Objednávka #{rec.orderNumber ?? "—"} · Pípač #{rec.vysielac ?? "—"}</span>
                               <div>{items || "—"}{prilohy && <span className="k-help"> · ↳ {prilohy}</span>}</div>
                             </td>
@@ -613,7 +659,14 @@ export default function Kasa() {
                       <article className="o-card" key={rec.id} style={{ background: orderColor(rec.objednavkaId || rec.id) }}>
                         <header className="o-head">
                           <div>
-                            <div className="o-id">Pípač #{rec.vysielac ?? "—"}</div>
+                            <div className="o-id">
+                              <span
+                                className={`status-dot ${rieseneMap[rec.id] ? "status-dot--busy" : "status-dot--free"}`}
+                                title={rieseneMap[rec.id] ? "Niekto to už rieši – klikni pre zrušenie" : "Nikto to nerieši – klikni, ak to preberáš"}
+                                onClick={() => toggleRiesene(rec.id)}
+                              />
+                              Pípač #{rec.vysielac ?? "—"}
+                            </div>
                             <div style={{ fontSize: "0.8em", color: "#6b7280", marginTop: 1 }}>Objednávka #{rec.orderNumber ?? "—"}</div>
                           </div>
                           <div className="o-time" title={new Date(rec.completedAt || rec.createdAt || Date.now()).toLocaleString()}>
