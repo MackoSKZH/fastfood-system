@@ -14,6 +14,9 @@ import InfoModal from "../components/InfoModal";
 import "./kiosk.css";
 import RoleHeader from "./RoleHeader";
 import { useSession } from "../SessionProvider";
+import { useToast } from "../ui/toast";
+import { getPrinter } from "../lib/catPrinterBLE";
+import { renderReceipt, saveCanvasPngSilently } from "../lib/receiptCanvas";
 
 const VIP_VYSIELACE = ["01", "02", "03", "04"];
 
@@ -40,6 +43,7 @@ function itemColorFn(farba) {
 export default function Kasa() {
   const navigate = useNavigate();
   const { sessionCode: session } = useSession();
+  const toast = useToast();
 
   const [preset, setPreset] = useState("");
   const [vsetkyPresety, setVsetkyPresety] = useState([]);
@@ -54,6 +58,8 @@ export default function Kasa() {
   const [rieseneMap, setRieseneMap] = useState({});
   const [now, setNow] = useState(Date.now());
   const [zaplatene, setZaplatene] = useState(0);
+  const [poslednyBlok, setPoslednyBlok] = useState(null);
+  const [tlacim, setTlacim] = useState(false);
 
   const mamAktivnyLock = useRef(false);
   const skipAutoUnlockOnce = useRef(false);
@@ -195,6 +201,30 @@ export default function Kasa() {
   async function toggleRiesene(id) {
     if (!session) return;
     await set(ref(db, `sessions/${session}/riesene/${id}`), rieseneMap[id] ? null : true);
+  }
+
+  async function vytlacitBlok() {
+    if (!poslednyBlok) return;
+    const printer = getPrinter();
+    if (!printer.isSupported()) {
+      toast.error("Tento prehliadač nepodporuje Web Bluetooth (funguje len Chrome na Androide).");
+      return;
+    }
+    setTlacim(true);
+    try {
+      const { rows, canvas } = renderReceipt(poslednyBlok);
+      saveCanvasPngSilently(canvas, `blocek-${poslednyBlok.orderNumber}-${Date.now()}.png`).catch(() => {});
+      if (!printer.isConnected()) {
+        toast.info("Pripájam na tlačiareň…");
+      }
+      await printer.printBitmap(rows);
+      toast.success("Bloček vytlačený.");
+    } catch (err) {
+      console.error("Chyba pri tlači bločku:", err);
+      toast.error(err?.message || "Tlač zlyhala.");
+    } finally {
+      setTlacim(false);
+    }
   }
 
   async function zrusitObjednavku() {
@@ -339,6 +369,26 @@ export default function Kasa() {
         await set(lockRef, true);
         mamAktivnyLock.current = true;
       }
+
+      const suma = spocitajCenu();
+      const riadkyBloku = cartItems.map((item) => {
+        const pol = menu.find((m) => m.nazov === item.nazov);
+        const prilohyBloku = Object.entries(item.prilohy).map(([pnazov, count]) => {
+          const pr = pol?.prilohy?.find((p) => p.nazov === pnazov);
+          return { nazov: pnazov, cena: pr?.cena || 0, count };
+        });
+        return { nazov: item.nazov, cena: pol?.cena || 0, prilohy: prilohyBloku };
+      });
+      setPoslednyBlok({
+        nazovPodniku: preset || session,
+        orderNumber,
+        vysielac: zvolenyVysielac,
+        riadky: riadkyBloku,
+        suma,
+        zaplatene,
+        vydaj: Math.round((zaplatene - suma) * 100) / 100,
+        createdAt: now,
+      });
 
       skipAutoUnlockOnce.current = true;
       setCartItems([]);
@@ -554,6 +604,17 @@ export default function Kasa() {
                 </button>
               </div>
               <div className="k-help">Po potvrdení sa vysielač uzamkne.</div>
+
+              {poslednyBlok && getPrinter().isSupported() && (
+                <div className="k-row" style={{ marginTop: 10 }}>
+                  <button className="k-btn" disabled={tlacim} onClick={vytlacitBlok}>
+                    {tlacim ? "Tlačím…" : "🖨️ Vytlačiť bloček"}
+                  </button>
+                  <span className="k-help">
+                    Objednávka #{poslednyBlok.orderNumber} · Pípač #{poslednyBlok.vysielac}
+                  </span>
+                </div>
+              )}
             </aside>
 
             {/* KALKULAČKA */}
