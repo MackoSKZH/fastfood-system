@@ -125,6 +125,15 @@ code{ background:#f3f4f6; padding:2px 6px; border-radius:6px }
 .k-grid{ display:grid; grid-template-columns: 1fr 360px; gap:16px }
 @media (max-width: 1000px){ .k-grid{ grid-template-columns:1fr } }
 
+.k-order-sidebar{
+  position: sticky;
+  max-height: calc(100vh - 24px);
+  overflow-y: auto;
+}
+@media (max-width: 1000px){
+  .k-order-sidebar{ position: static; max-height: none; overflow-y: visible; }
+}
+
 .k-cart{ position:sticky; top:72px; align-self:start }
 .k-cart .row{
     display:flex; justify-content:space-between; align-items:center;
@@ -615,15 +624,16 @@ code{ background:#f3f4f6; padding:2px 6px; border-radius:6px }
 /* stav objednávky – rieši ju už niekto? */
 .status-dot{
   display: inline-block;
-  width: 10px;
-  height: 10px;
+  width: 18px;
+  height: 18px;
   border-radius: 50%;
-  margin-right: 6px;
+  margin-right: 8px;
   vertical-align: middle;
   cursor: pointer;
   border: 2px solid rgba(0,0,0,.15);
 }
 .status-dot--free{ background: #22c55e; }
+.status-dot--mine{ background: #eab308; }
 .status-dot--busy{ background: #dc2626; }
 /* ===== Obsluha – mobilné karty ===== */
 .o-cards{

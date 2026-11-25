@@ -10,13 +10,16 @@ import {
 } from "firebase/database";
 import { useNavigate } from "react-router-dom";
 import InfoModal from "../components/InfoModal";
+import HistoryModal from "../components/HistoryModal";
 
 import "./kiosk.css";
 import RoleHeader from "./RoleHeader";
 import { useSession } from "../SessionProvider";
 import { useToast } from "../ui/toast";
-import { getPrinter } from "../lib/catPrinterBLE";
 import { renderReceipt, saveCanvasPngSilently } from "../lib/receiptCanvas";
+import { printCanvasViaRawBT } from "../lib/rawbtPrint";
+import { isWebSerialSupported, printCanvasViaWebSerial } from "../lib/webSerialPrint";
+import { getClientId } from "../lib/clientId";
 
 const VIP_VYSIELACE = ["01", "02", "03", "04"];
 
@@ -33,6 +36,18 @@ export const ITEM_COLORS = [
   { bg: '#F3E8FF', border: '#C084FC', btn: '#9333EA' },
   { bg: '#DCFCE7', border: '#4ADE80', btn: '#16A34A' },
   { bg: '#FEF9C3', border: '#FDE047', btn: '#CA8A04' },
+  { bg: '#ECFCCB', border: '#A3E635', btn: '#65A30D' },
+  { bg: '#CFFAFE', border: '#22D3EE', btn: '#0E7490' },
+  { bg: '#FAE8FF', border: '#E879F9', btn: '#A21CAF' },
+  { bg: '#FFE4E6', border: '#FB7185', btn: '#BE123C' },
+  { bg: '#E0E7FF', border: '#818CF8', btn: '#4338CA' },
+  { bg: '#F1F5F9', border: '#94A3B8', btn: '#334155' },
+  { bg: '#F3E8D9', border: '#B08968', btn: '#6B4226' },
+  { bg: '#F4F4D8', border: '#C4C46A', btn: '#6B6B1F' },
+  { bg: '#F5D6D9', border: '#C2536B', btn: '#7A1F30' },
+  { bg: '#DCEEFB', border: '#60A5C7', btn: '#1D4E71' },
+  { bg: '#E5E7EB', border: '#6B7280', btn: '#1F2937' },
+  { bg: '#FFE8E1', border: '#FF8A65', btn: '#D84315' },
 ];
 
 function itemColorFn(farba) {
@@ -44,6 +59,7 @@ export default function Kasa() {
   const navigate = useNavigate();
   const { sessionCode: session } = useSession();
   const toast = useToast();
+  const myClientId = getClientId();
 
   const [preset, setPreset] = useState("");
   const [vsetkyPresety, setVsetkyPresety] = useState([]);
@@ -53,6 +69,7 @@ export default function Kasa() {
   // Each entry: { id: string, nazov: string, prilohy: { [prilohaName]: count } }
   const [cartItems, setCartItems] = useState([]);
   const [showInfo, setShowInfo] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
   const [logZaznamy, setLogZaznamy] = useState([]);
   const [prevzateMap, setPrevzateMap] = useState({});
   const [rieseneMap, setRieseneMap] = useState({});
@@ -60,13 +77,30 @@ export default function Kasa() {
   const [zaplatene, setZaplatene] = useState(0);
   const [poslednyBlok, setPoslednyBlok] = useState(null);
   const [tlacim, setTlacim] = useState(false);
+  const stiahnutyBlokIdRef = useRef(null);
 
   const mamAktivnyLock = useRef(false);
   const skipAutoUnlockOnce = useRef(false);
+  const pravyPanelRef = useRef(null);
 
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(t);
+  }, []);
+
+  // Pravý panel (objednávka + kalkulačka) je "prilepený" pri scrollovaní menu –
+  // top offset sa dopočíta podľa reálnej výšky sticky hlavičiek nad ním, aby ich neprekrýval.
+  useEffect(() => {
+    function nastavOffset() {
+      if (!pravyPanelRef.current) return;
+      const header = document.querySelector(".role-header");
+      const top = document.querySelector(".k-top");
+      const vyska = (header?.offsetHeight || 0) + (top?.offsetHeight || 0) + 12;
+      pravyPanelRef.current.style.top = `${vyska}px`;
+    }
+    nastavOffset();
+    window.addEventListener("resize", nastavOffset);
+    return () => window.removeEventListener("resize", nastavOffset);
   }, []);
 
   useEffect(() => {
@@ -121,10 +155,25 @@ export default function Kasa() {
         nazov,
         cena: Number((v && v.cena) ?? 0),
         farba: (v?.farba != null) ? Number(v.farba) : null,
+        poradie: (v?.poradie != null) ? Number(v.poradie) : null,
         prilohy: Object.entries(v?.prilohy || {})
-          .map(([pn, pv]) => ({ nazov: pn, cena: Number(pv?.cena ?? 0) }))
-          .sort((a, b) => a.nazov.localeCompare(b.nazov, "sk")),
-      })));
+          .map(([pn, pv]) => ({
+            nazov: pn,
+            cena: Number(pv?.cena ?? 0),
+            poradie: (pv?.poradie != null) ? Number(pv.poradie) : null,
+          }))
+          .sort((a, b) => {
+            const pa = a.poradie ?? Infinity;
+            const pb = b.poradie ?? Infinity;
+            if (pa !== pb) return pa - pb;
+            return a.nazov.localeCompare(b.nazov, "sk");
+          }),
+      })).sort((a, b) => {
+        const pa = a.poradie ?? Infinity;
+        const pb = b.poradie ?? Infinity;
+        if (pa !== pb) return pa - pb;
+        return a.nazov.localeCompare(b.nazov, "sk");
+      }));
     });
     return () => off();
   }, [preset]);
@@ -198,33 +247,101 @@ export default function Kasa() {
     }
   }
 
-  async function toggleRiesene(id) {
-    if (!session) return;
-    await set(ref(db, `sessions/${session}/riesene/${id}`), rieseneMap[id] ? null : true);
+  function rieseneStav(id) {
+    const vlastnik = rieseneMap[id];
+    if (!vlastnik) return "free";
+    if (vlastnik === myClientId) return "mine";
+    return "busy";
   }
 
-  async function vytlacitBlok() {
-    if (!poslednyBlok) return;
-    const printer = getPrinter();
-    if (!printer.isSupported()) {
-      toast.error("Tento prehliadač nepodporuje Web Bluetooth (funguje len Chrome na Androide).");
+  function rieseneTitle(id) {
+    const stav = rieseneStav(id);
+    if (stav === "free") return "Nikto to nerieši – klikni, ak to preberáš";
+    if (stav === "mine") return "Ty to riešiš – klikni pre zrušenie";
+    return "Rieši niekto iný";
+  }
+
+  async function toggleRiesene(id) {
+    if (!session) return;
+    const stav = rieseneStav(id);
+    if (stav === "busy") {
+      toast.warn("Túto objednávku už rieši niekto iný.");
       return;
     }
+    if (stav === "free") {
+      const uzNiecoNesiem = Object.entries(rieseneMap).some(([oid, vlastnik]) => oid !== id && vlastnik === myClientId);
+      if (uzNiecoNesiem) {
+        toast.warn("Najprv odovzdaj alebo odznač objednávku, ktorú už nesieš.");
+        return;
+      }
+    }
+    await set(ref(db, `sessions/${session}/riesene/${id}`), stav === "mine" ? null : myClientId);
+  }
+
+  async function tlacObjednavky(receiptObj) {
+    if (!receiptObj) return;
     setTlacim(true);
     try {
-      const { rows, canvas } = renderReceipt(poslednyBlok);
-      saveCanvasPngSilently(canvas, `blocek-${poslednyBlok.orderNumber}-${Date.now()}.png`).catch(() => {});
-      if (!printer.isConnected()) {
-        toast.info("Pripájam na tlačiareň…");
+      const canvas = await renderReceipt(receiptObj);
+      if (stiahnutyBlokIdRef.current !== receiptObj.createdAt) {
+        stiahnutyBlokIdRef.current = receiptObj.createdAt;
+        saveCanvasPngSilently(canvas, `blocek-${receiptObj.orderNumber}-${receiptObj.createdAt}.png`).catch(() => {});
       }
-      await printer.printBitmap(rows);
-      toast.success("Bloček vytlačený.");
+      let vytlacenePriamo = false;
+      if (isWebSerialSupported()) {
+        try {
+          await printCanvasViaWebSerial(canvas);
+          toast.success("Bloček vytlačený (sériový port).");
+          vytlacenePriamo = true;
+        } catch (serialErr) {
+          // Web Serial je na Androide ešte len experimentálny/nespoľahlivý – tichý fallback na RawBT.
+          console.warn("Web Serial tlač zlyhala, skúšam RawBT:", serialErr);
+        }
+      }
+      if (!vytlacenePriamo) {
+        printCanvasViaRawBT(canvas);
+        toast.success("Bloček odoslaný do RawBT na tlač.");
+      }
     } catch (err) {
       console.error("Chyba pri tlači bločku:", err);
       toast.error(err?.message || "Tlač zlyhala.");
     } finally {
       setTlacim(false);
     }
+  }
+
+  async function vytlacitBlok() {
+    await tlacObjednavky(poslednyBlok);
+  }
+
+  // Znovupostaví objekt pre tlačiareň zo záznamu v histórii (sessions/{session}/log).
+  // Cena položiek/príloh sa dopočítava z aktuálneho presetu – ak sa ceny odvtedy zmenili,
+  // reprint ukáže aktuálne ceny, nie tie z momentu objednania.
+  function buildReceiptFromLog(rec) {
+    const pol = rec?.polozky || {};
+    const prilohyMap = rec?.prilohy || {};
+    const riadky = [];
+    Object.entries(pol).forEach(([nazov, pocet]) => {
+      const menuItem = menu.find((m) => m.nazov === nazov);
+      const cena = menuItem?.cena || 0;
+      for (let idx = 0; idx < Number(pocet || 0); idx++) {
+        const instancePrilohy = prilohyMap[`${nazov}||${idx}`] || {};
+        const prilohy = Object.entries(instancePrilohy).map(([pnazov, count]) => {
+          const pr = menuItem?.prilohy?.find((p) => p.nazov === pnazov);
+          return { nazov: pnazov, cena: pr?.cena || 0, count };
+        });
+        riadky.push({ nazov, cena, prilohy });
+      }
+    });
+    return {
+      nazovPodniku: preset || session,
+      orderNumber: rec.orderNumber,
+      vysielac: rec.vysielac,
+      riadky,
+      suma: Number(rec?.suma || 0),
+      // zaplatené/vydané sa v histórii neukladá (počítalo sa len naživo pri kase) – vynechá sa na bločku
+      createdAt: rec.createdAt || rec.completedAt || Date.now(),
+    };
   }
 
   async function zrusitObjednavku() {
@@ -340,7 +457,7 @@ export default function Kasa() {
       const orderNumber = counterRes.snapshot.val();
 
       if (isExpress) {
-        // Expresná objednávka – preskočí kuchyňu, ide rovno ako ready
+        // Expresná objednávka – vydá sa rovno na kase, nejde do kuchyne ani do obsluhy
         const newLog = push(ref(db, `sessions/${session}/log`));
         await set(newLog, {
           vysielac: zvolenyVysielac,
@@ -351,8 +468,9 @@ export default function Kasa() {
           completedAt: now,
           createdAt: now,
         });
+        await set(ref(db, `sessions/${session}/prevzate/${newLog.key}`), true);
         try { await onDisconnect(lockRef).cancel(); } catch {}
-        await set(lockRef, "ready");
+        await set(lockRef, null);
         mamAktivnyLock.current = false;
       } else {
         const newRef = push(ref(db, `sessions/${session}/objednavky`));
@@ -427,6 +545,7 @@ export default function Kasa() {
           <div className="k-row" style={{ justifyContent: "space-between" }}>
             <div className="k-row">
               <button className="btn" onClick={() => setShowInfo(true)}>Info</button>
+              <button className="k-btn" onClick={() => setShowHistory(true)}>História</button>
               <button className="k-btn" onClick={goToPresety}>Presety</button>
               {vsetkyPresety.length ? (
                 <select
@@ -447,6 +566,15 @@ export default function Kasa() {
           </div>
         </div>
         {showInfo && <InfoModal session={session} onClose={() => setShowInfo(false)} />}
+        {showHistory && (
+          <HistoryModal
+            session={session}
+            logZaznamy={logZaznamy}
+            tlacim={tlacim}
+            onPrint={(rec) => tlacObjednavky(buildReceiptFromLog(rec))}
+            onClose={() => setShowHistory(false)}
+          />
+        )}
 
         <div className="k-grid">
           <div className="k-col">
@@ -482,7 +610,11 @@ export default function Kasa() {
             </div>
           </div>
 
-          <div style={{ display: "flex", flexDirection: "column", gap: 12, alignSelf: "start" }}>
+          <div
+            ref={pravyPanelRef}
+            className="k-order-sidebar"
+            style={{ display: "flex", flexDirection: "column", gap: 12, alignSelf: "start" }}
+          >
             <aside className="k-panel k-cart" style={{ position: "static", width: "100%" }}>
               <h3 style={{ marginTop: 0 }}>Moja objednávka</h3>
 
@@ -517,6 +649,9 @@ export default function Kasa() {
                     onChange={(e) => {
                       const val = e.target.value;
                       setZvolenyVysielac(val ? Number(val) : null);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") e.currentTarget.blur();
                     }}
                     style={{ width: 70, padding: "6px 8px", borderRadius: 8, border: "1px solid #ccc", fontSize: 15 }}
                   />
@@ -605,7 +740,7 @@ export default function Kasa() {
               </div>
               <div className="k-help">Po potvrdení sa vysielač uzamkne.</div>
 
-              {poslednyBlok && getPrinter().isSupported() && (
+              {poslednyBlok && (
                 <div className="k-row" style={{ marginTop: 10 }}>
                   <button className="k-btn" disabled={tlacim} onClick={vytlacitBlok}>
                     {tlacim ? "Tlačím…" : "🖨️ Vytlačiť bloček"}
@@ -684,12 +819,15 @@ export default function Kasa() {
                               {timeAgo(rec.completedAt || rec.createdAt)}
                             </td>
                             <td>
-                              <span
-                                className={`status-dot ${rieseneMap[rec.id] ? "status-dot--busy" : "status-dot--free"}`}
-                                title={rieseneMap[rec.id] ? "Niekto to už rieši – klikni pre zrušenie" : "Nikto to nerieši – klikni, ak to preberáš"}
-                                onClick={() => toggleRiesene(rec.id)}
-                              />
-                              <span style={{ fontSize: "0.82em", color: "#6b7280" }}>Objednávka #{rec.orderNumber ?? "—"} · Pípač #{rec.vysielac ?? "—"}</span>
+                              <div>
+                                <span
+                                  className={`status-dot status-dot--${rieseneStav(rec.id)}`}
+                                  title={rieseneTitle(rec.id)}
+                                  onClick={() => toggleRiesene(rec.id)}
+                                />
+                                <span style={{ fontWeight: 900, fontSize: "1.15em" }}>Pípač #{rec.vysielac ?? "—"}</span>
+                              </div>
+                              <div style={{ fontSize: "0.82em", color: "#6b7280" }}>Objednávka #{rec.orderNumber ?? "—"}</div>
                               <div>{items || "—"}{prilohy && <span className="k-help"> · ↳ {prilohy}</span>}</div>
                             </td>
                             <td>{typeof rec.suma === "number" ? rec.suma.toFixed(2) + " €" : rec.suma || "—"}</td>
@@ -722,8 +860,8 @@ export default function Kasa() {
                           <div>
                             <div className="o-id">
                               <span
-                                className={`status-dot ${rieseneMap[rec.id] ? "status-dot--busy" : "status-dot--free"}`}
-                                title={rieseneMap[rec.id] ? "Niekto to už rieši – klikni pre zrušenie" : "Nikto to nerieši – klikni, ak to preberáš"}
+                                className={`status-dot status-dot--${rieseneStav(rec.id)}`}
+                                title={rieseneTitle(rec.id)}
                                 onClick={() => toggleRiesene(rec.id)}
                               />
                               Pípač #{rec.vysielac ?? "—"}

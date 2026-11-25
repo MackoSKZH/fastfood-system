@@ -137,16 +137,19 @@ code{ background:#f3f4f6; padding:2px 6px; border-radius:6px }
   transform: translateY(0);
 }
 
-/* Pager – šípky nalepené na ľavom/pravom okraji */
+/* Pager – šípky prepínajú medzi horným a dolným okrajom obrazovky podľa scrollu
+   (trieda .dole sa nastavuje v Kuchyna.js) – nikdy nesedia v strede, kde by
+   prekrývali tlačidlá/checkboxy na kartách objednávok. Platí pre PC aj mobil. */
 .orders-wrap {
-    position: relative;
-    padding-top: 72px; /* miesto pre šípky, aby neprekrývali checkboxy */
-  }
+  position: relative;
+  padding-top: 8px;
+  touch-action: pan-y;
+}
 
 .pager {
-  position: absolute;
+  position: fixed;
   top: 8px;
-  transform: none;
+  bottom: auto;
   z-index: 15;
   width: 56px;
   height: 56px;
@@ -161,6 +164,12 @@ code{ background:#f3f4f6; padding:2px 6px; border-radius:6px }
   place-items: center;
   cursor: pointer;
   user-select: none;
+  transition: top .15s ease, bottom .15s ease;
+}
+
+.pager.dole {
+  top: auto;
+  bottom: 12px;
 }
 
 .pager.left {
@@ -175,6 +184,15 @@ code{ background:#f3f4f6; padding:2px 6px; border-radius:6px }
   opacity: .4;
   cursor: default;
   pointer-events: none;
+}
+
+/* Prechod pri zmene stránky (šípka aj swipe) */
+@keyframes pageSlideIn {
+  from { opacity: 0; transform: translateX(14px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+.orders-grid {
+  animation: pageSlideIn .22s ease;
 }
 
 /* indikátor stránkovania dole pod gridom */

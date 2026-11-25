@@ -1,23 +1,90 @@
-import { PRINT_WIDTH } from "./catPrinterBLE";
-
-const PADDING_X = 8;
-const LINE_H = 24;
-const LINE_H_SMALL = 20;
-const FEED_ROWS = 40;
+const PRINT_WIDTH = 384; // 58mm papier, 8 dots/mm (203dpi) – zodpovedá MPT-II aj väčšine 58mm tlačiarní
+const PADDING_X = 10;
+const LINE_H = 38;
+const LINE_H_SMALL = 30;
+const FEED_ROWS = 50;
 const MAX_HEIGHT = 4000;
-const DARK_THRESHOLD = 200;
+const MIN_HEIGHT = 480; // aby aj bloček s 1 položkou vyzeral ako "normálny" lístok, nie odstrihnutý útržok
 
 function formatMoney(v) {
   return `${(Number(v) || 0).toFixed(2)} €`;
 }
 
+// Niektorí si do názvu položky dajú emoji kvôli rýchlej orientácii v Kase –
+// na bločku ho nechceme, len zbytočne zaberá miesto a mätie čiernobielu tlačiareň.
+const VARIATION_SELECTOR = "\\uFE0F";
+const ZWJ = "\\u200D";
+const EMOJI_ZWJ_SEQ = new RegExp(
+  `\\p{Extended_Pictographic}(${VARIATION_SELECTOR})?(${ZWJ}\\p{Extended_Pictographic}(${VARIATION_SELECTOR})?)*`,
+  "gu"
+);
+const SKIN_TONE_MODIFIERS = /[\u{1F3FB}-\u{1F3FF}]/gu;
+const LEFTOVER_MARKS = new RegExp(`[${VARIATION_SELECTOR}${ZWJ}]`, "g");
+
+function stripEmoji(text) {
+  return String(text ?? "")
+    .replace(EMOJI_ZWJ_SEQ, "")
+    .replace(SKIN_TONE_MODIFIERS, "")
+    .replace(LEFTOVER_MARKS, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
+// Skúša zmenšovať font (od baseSize po minSize), kým sa text nezmestí do maxWidth.
+// Nastaví ctx.font na výsledné veľkosti a vráti ju.
+function fitFontSize(ctx, text, maxWidth, baseSize, minSize, prefix = "") {
+  let size = baseSize;
+  while (size > minSize) {
+    ctx.font = `${prefix}${size}px monospace`;
+    if (ctx.measureText(text).width <= maxWidth) return size;
+    size -= 1;
+  }
+  ctx.font = `${prefix}${minSize}px monospace`;
+  return minSize;
+}
+
+// Posledná záchrana pre extrémne dlhý text (napr. jedno neprerušiteľné slovo),
+// ktorý sa nezmestí ani pri minimálnej veľkosti písma.
 function truncateToWidth(ctx, text, maxWidth) {
   if (ctx.measureText(text).width <= maxWidth) return text;
   let t = text;
-  while (t.length > 1 && ctx.measureText(t + "…").width > maxWidth) {
+  while (t.length > 1 && ctx.measureText(t + "...").width > maxWidth) {
     t = t.slice(0, -1);
   }
-  return t + "…";
+  return t + "...";
+}
+
+function wrapTextLines(ctx, text, maxWidth) {
+  const words = text.split(" ");
+  const lines = [];
+  let current = "";
+  for (const word of words) {
+    const attempt = current ? `${current} ${word}` : word;
+    if (current && ctx.measureText(attempt).width > maxWidth) {
+      lines.push(current);
+      current = word;
+    } else {
+      current = attempt;
+    }
+  }
+  if (current) lines.push(current);
+  return lines;
+}
+
+const LOGO_SRC = "/hontfest-logo.jpg"; // musí byť v priečinku public/
+const LOGO_WIDTH = 180;
+let logoImagePromise = null;
+
+function loadLogoImage() {
+  if (!logoImagePromise) {
+    logoImagePromise = new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = () => resolve(null); // logo chýba/nedostupné – bloček sa vytlačí aj bez neho
+      img.src = LOGO_SRC;
+    });
+  }
+  return logoImagePromise;
 }
 
 function drawDivider(ctx, y, width) {
@@ -40,28 +107,11 @@ function drawKeyValue(ctx, label, value, y, width) {
   return y + LINE_H;
 }
 
-// imageData: { data: Uint8ClampedArray (RGBA), width, height } – rozoberateľné aj bez reálneho canvasu (testovateľné).
-export function imageDataToRows(imageData, width, height) {
-  const { data } = imageData;
-  const rows = [];
-  for (let yRow = 0; yRow < height; yRow++) {
-    const row = new Uint8Array(width);
-    for (let x = 0; x < width; x++) {
-      const idx = (yRow * width + x) * 4;
-      const a = data[idx + 3];
-      const luminance = a === 0 ? 255 : (data[idx] + data[idx + 1] + data[idx + 2]) / 3;
-      row[x] = luminance < DARK_THRESHOLD ? 1 : 0;
-    }
-    rows.push(row);
-  }
-  return rows;
-}
-
 // order: { nazovPodniku, orderNumber, vysielac, createdAt,
 //          riadky: [{ nazov, cena, prilohy: [{ nazov, cena, count }] }],
 //          suma, zaplatene, vydaj }
 // Vráti canvas orezaný presne na výšku vytlačeného obsahu (bez bieleho prebytku dole).
-function drawReceiptCanvas(order) {
+async function drawReceiptCanvas(order) {
   const width = PRINT_WIDTH;
   const canvas = document.createElement("canvas");
   canvas.width = width;
@@ -73,62 +123,114 @@ function drawReceiptCanvas(order) {
   ctx.fillStyle = "#000";
   ctx.textBaseline = "top";
 
-  let y = 10;
+  let y = 14;
 
-  ctx.font = "bold 20px monospace";
+  const logo = await loadLogoImage();
+  if (logo && logo.width > 0) {
+    const logoHeight = (logo.height / logo.width) * LOGO_WIDTH;
+    ctx.drawImage(logo, (width - LOGO_WIDTH) / 2, y, LOGO_WIDTH, logoHeight);
+    y += logoHeight + 12;
+  }
+
+  const nadpis = order.nazovPodniku || "Bloček";
   ctx.textAlign = "center";
-  ctx.fillText(order.nazovPodniku || "Bloček", width / 2, y);
-  y += 30;
+  fitFontSize(ctx, nadpis, width - PADDING_X * 2, 32, 20, "bold ");
+  ctx.fillText(nadpis, width / 2, y);
+  y += 46;
 
-  ctx.font = "13px monospace";
+  ctx.font = "20px monospace";
   ctx.textAlign = "center";
   if (order.createdAt) {
     ctx.fillText(new Date(order.createdAt).toLocaleString("sk-SK"), width / 2, y);
     y += LINE_H_SMALL;
   }
-  ctx.fillText(`Objednávka #${order.orderNumber ?? "—"} · Pípač #${order.vysielac ?? "—"}`, width / 2, y);
-  y += LINE_H_SMALL + 6;
+  ctx.fillText(`Objednávka #${order.orderNumber ?? "-"} - Pípač #${order.vysielac ?? "-"}`, width / 2, y);
+  y += LINE_H_SMALL + 8;
 
   drawDivider(ctx, y, width);
-  y += 14;
+  y += 20;
 
-  ctx.font = "15px monospace";
   (order.riadky || []).forEach((r) => {
+    ctx.font = "24px monospace";
+    const nazov = stripEmoji(r.nazov);
     const priceText = formatMoney(r.cena);
-    const nameMaxWidth = width - PADDING_X * 2 - ctx.measureText(priceText).width - 10;
-    ctx.textAlign = "left";
-    ctx.fillText(truncateToWidth(ctx, r.nazov, nameMaxWidth), PADDING_X, y);
-    ctx.textAlign = "right";
-    ctx.fillText(priceText, width - PADDING_X, y);
-    y += LINE_H;
+    const priceWidth = ctx.measureText(priceText).width;
+    const fullWidth = width - PADDING_X * 2;
+    const nameMaxWidth = fullWidth - priceWidth - 10;
+
+    if (ctx.measureText(nazov).width <= nameMaxWidth) {
+      // zmestí sa na jeden riadok spolu s cenou
+      ctx.textAlign = "left";
+      ctx.fillText(nazov, PADDING_X, y);
+      ctx.textAlign = "right";
+      ctx.fillText(priceText, width - PADDING_X, y);
+      y += LINE_H;
+    } else {
+      // dlhý názov – zalomí sa na viac riadkov (pevná veľkosť písma), cena na vlastnom riadku pod tým
+      ctx.textAlign = "left";
+      wrapTextLines(ctx, nazov, fullWidth).forEach((line) => {
+        ctx.fillText(line, PADDING_X, y);
+        y += LINE_H;
+      });
+      ctx.textAlign = "right";
+      ctx.fillText(priceText, width - PADDING_X, y);
+      y += LINE_H;
+    }
 
     (r.prilohy || []).forEach((p) => {
-      ctx.font = "13px monospace";
-      const label = `↳ ${p.count > 1 ? `${p.count}× ` : ""}${p.nazov}`;
-      ctx.textAlign = "left";
-      ctx.fillText(label, PADDING_X + 14, y);
+      const label = `- ${p.count > 1 ? `${p.count}x ` : ""}${stripEmoji(p.nazov)}`;
+      ctx.font = "19px monospace";
+      let priceStr = "";
+      let priceW = 0;
       if (p.cena) {
+        priceStr = formatMoney(p.cena * (p.count || 1));
+        priceW = ctx.measureText(priceStr).width;
+      }
+      const labelMaxWidth = width - PADDING_X * 2 - 16 - priceW - 10;
+      fitFontSize(ctx, label, labelMaxWidth, 19, 12);
+      ctx.textAlign = "left";
+      ctx.fillText(truncateToWidth(ctx, label, labelMaxWidth), PADDING_X + 16, y);
+      if (priceStr) {
+        ctx.font = "19px monospace";
         ctx.textAlign = "right";
-        ctx.fillText(formatMoney(p.cena * (p.count || 1)), width - PADDING_X, y);
+        ctx.fillText(priceStr, width - PADDING_X, y);
       }
       y += LINE_H_SMALL;
-      ctx.font = "15px monospace";
+      ctx.font = "24px monospace";
     });
   });
 
-  y += 6;
+  y += 8;
   drawDivider(ctx, y, width);
-  y += 16;
+  y += 24;
 
-  ctx.font = "bold 16px monospace";
+  ctx.font = "bold 26px monospace";
   y = drawKeyValue(ctx, "Spolu", formatMoney(order.suma), y, width);
-  ctx.font = "15px monospace";
-  y = drawKeyValue(ctx, "Zaplatené", formatMoney(order.zaplatene), y, width);
-  y = drawKeyValue(ctx, "Vydané", formatMoney(order.vydaj), y, width);
+  if (order.zaplatene != null) {
+    ctx.font = "22px monospace";
+    y = drawKeyValue(ctx, "Zaplatené", formatMoney(order.zaplatene), y, width);
+    y = drawKeyValue(ctx, "Vydané", formatMoney(order.vydaj), y, width);
+  }
+
+  y += 16;
+  drawDivider(ctx, y, width);
+  y += 22;
+
+  ctx.font = "bold italic 22px monospace";
+  ctx.textAlign = "center";
+  wrapTextLines(ctx, "Touto kúpou podporujete v plnej sume organizáciu festivalu", width - PADDING_X * 2).forEach((line) => {
+    ctx.fillText(line, width / 2, y);
+    y += LINE_H;
+  });
+
+  y += 6;
+  ctx.font = "bold 24px monospace";
+  ctx.fillText("Ďakujeme :)", width / 2, y);
+  y += LINE_H;
 
   y += FEED_ROWS;
 
-  const contentHeight = Math.min(Math.ceil(y), MAX_HEIGHT);
+  const contentHeight = Math.max(Math.min(Math.ceil(y), MAX_HEIGHT), MIN_HEIGHT);
   const cropped = document.createElement("canvas");
   cropped.width = width;
   cropped.height = contentHeight;
@@ -136,14 +238,9 @@ function drawReceiptCanvas(order) {
   return cropped;
 }
 
-// order → { rows, canvas } – rows sú pre tlačiareň (BLE bitmapa), canvas je orezaný
-// obrázok bločku vhodný napr. na PNG export.
-export function renderReceipt(order) {
-  const canvas = drawReceiptCanvas(order);
-  const ctx = canvas.getContext("2d");
-  const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-  const rows = imageDataToRows(imageData, canvas.width, canvas.height);
-  return { rows, canvas };
+// order → canvas orezaný na výšku obsahu, pripravený na PNG export/tlač.
+export async function renderReceipt(order) {
+  return drawReceiptCanvas(order);
 }
 
 // Tichy download canvasu ako PNG (bez dialógu) – použije sa napr. na archiváciu bločku.

@@ -5,9 +5,13 @@ import "./kiosk.css";
 import "./kuchyna.css";
 import RoleHeader from "./RoleHeader";
 import { useSession } from "../SessionProvider";
+import { useToast } from "../ui/toast";
+import { getClientId } from "../lib/clientId";
 
 export default function Obsluha() {
   const { sessionCode: session } = useSession();
+  const toast = useToast();
+  const myClientId = getClientId();
   const [logZaznamy, setLogZaznamy] = useState([]);
   const [prevzate, setPrevzate] = useState({});
   const [riesene, setRiesene] = useState({});
@@ -174,9 +178,35 @@ export default function Obsluha() {
     }
   }
 
+  function rieseneStav(id) {
+    const vlastnik = riesene[id];
+    if (!vlastnik) return "free";
+    if (vlastnik === myClientId) return "mine";
+    return "busy";
+  }
+
+  function rieseneTitle(id) {
+    const stav = rieseneStav(id);
+    if (stav === "free") return "Nikto to nerieši – klikni, ak to preberáš";
+    if (stav === "mine") return "Ty to riešiš – klikni pre zrušenie";
+    return "Rieši niekto iný";
+  }
+
   async function toggleRiesene(id) {
     if (!session) return;
-    await set(ref(db, `sessions/${session}/riesene/${id}`), riesene[id] ? null : true);
+    const stav = rieseneStav(id);
+    if (stav === "busy") {
+      toast.warn("Túto objednávku už rieši niekto iný.");
+      return;
+    }
+    if (stav === "free") {
+      const uzNiecoNesiem = Object.entries(riesene).some(([oid, vlastnik]) => oid !== id && vlastnik === myClientId);
+      if (uzNiecoNesiem) {
+        toast.warn("Najprv odovzdaj alebo odznač objednávku, ktorú už nesieš.");
+        return;
+      }
+    }
+    await set(ref(db, `sessions/${session}/riesene/${id}`), stav === "mine" ? null : myClientId);
   }
 
   function expandItems(rec) {
@@ -236,14 +266,15 @@ export default function Obsluha() {
                         {timeAgo(rec.completedAt || rec.createdAt)}
                       </td>
                       <td>
-                        <div style={{ fontSize: "0.82em", color: "#6b7280", marginBottom: 2 }}>
+                        <div>
                           <span
-                            className={`status-dot ${riesene[rec.id] ? "status-dot--busy" : "status-dot--free"}`}
-                            title={riesene[rec.id] ? "Niekto to už rieši – klikni pre zrušenie" : "Nikto to nerieši – klikni, ak to preberáš"}
+                            className={`status-dot status-dot--${rieseneStav(rec.id)}`}
+                            title={rieseneTitle(rec.id)}
                             onClick={() => toggleRiesene(rec.id)}
                           />
-                          Objednávka #{rec.orderNumber ?? "—"} · Pípač #{rec.vysielac ?? "—"}
+                          <span style={{ fontWeight: 900, fontSize: "1.15em" }}>Pípač #{rec.vysielac ?? "—"}</span>
                         </div>
+                        <div style={{ fontSize: "0.82em", color: "#6b7280", marginBottom: 2 }}>Objednávka #{rec.orderNumber ?? "—"}</div>
                         {instances.length === 0 && "—"}
                         {instances.map((item, i) => (
                           <div key={i}>
@@ -289,8 +320,8 @@ export default function Obsluha() {
                     <div>
                       <div className="o-id">
                         <span
-                          className={`status-dot ${riesene[rec.id] ? "status-dot--busy" : "status-dot--free"}`}
-                          title={riesene[rec.id] ? "Niekto to už rieši – klikni pre zrušenie" : "Nikto to nerieši – klikni, ak to preberáš"}
+                          className={`status-dot status-dot--${rieseneStav(rec.id)}`}
+                          title={rieseneTitle(rec.id)}
                           onClick={() => toggleRiesene(rec.id)}
                         />
                         Pípač #{rec.vysielac ?? "—"}

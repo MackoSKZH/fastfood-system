@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { db } from "../firebase";
 import { ref, onValue, get, push, set, runTransaction, remove } from "firebase/database";
 import "./kiosk.css";
@@ -25,6 +25,32 @@ export default function Kuchyna() {
   // ---- stránkovanie ----
   const pageSize = 3;
   const [page, setPage] = useState(0);
+
+  // Šípky: hore keď sme na začiatku stránky, dole keď sa scrolluje – nikdy
+  // nesedia pevne v strede, kde by prekrývali tlačidlá/checkboxy objednávok.
+  const [pagerDole, setPagerDole] = useState(false);
+  useEffect(() => {
+    function onScroll() {
+      setPagerDole(window.scrollY > 80);
+    }
+    onScroll();
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, []);
+
+  // Offset zhora sa meria podľa reálnej výšky sticky hlavičiek (RoleHeader + topbar),
+  // aby "hore" šípky neskončili schované pod nimi.
+  const [pagerTop, setPagerTop] = useState(8);
+  useEffect(() => {
+    function nastavOffset() {
+      const header = document.querySelector(".role-header");
+      const topbar = document.querySelector(".topbar");
+      setPagerTop((header?.offsetHeight || 0) + (topbar?.offsetHeight || 0) + 8);
+    }
+    nastavOffset();
+    window.addEventListener("resize", nastavOffset);
+    return () => window.removeEventListener("resize", nastavOffset);
+  }, []);
 
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 1000);
@@ -171,6 +197,21 @@ export default function Kuchyna() {
     const start = page * pageSize;
     return waitingOrders.slice(start, start + pageSize);
   }, [waitingOrders, page]);
+
+  // Swipe medzi stránkami (funguje popri šípkach – myšou aj prstom).
+  const swipeStart = useRef(null);
+  function handleSwipeStart(e) {
+    swipeStart.current = { x: e.clientX, y: e.clientY };
+  }
+  function handleSwipeEnd(e) {
+    if (!swipeStart.current) return;
+    const dx = e.clientX - swipeStart.current.x;
+    const dy = e.clientY - swipeStart.current.y;
+    swipeStart.current = null;
+    if (Math.abs(dx) < 60 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
+    if (dx < 0) setPage((p) => Math.min(pageCount - 1, p + 1));
+    else setPage((p) => Math.max(0, p - 1));
+  }
 
   // výpočet „Zostáva pripraviť“ (odpočítava zaškrtnuté z aktuálnej stránky)
   const toPrep = useMemo(() => {
@@ -362,7 +403,8 @@ export default function Kuchyna() {
           <div className="orders-wrap">
             {/* Pager šípky (pozície/zelene rieši CSS v kuchyna.css) */}
             <button
-              className="pager left"
+              className={`pager left${pagerDole ? " dole" : ""}`}
+              style={{ top: pagerDole ? undefined : pagerTop }}
               onClick={() => setPage((p) => Math.max(0, p - 1))}
               disabled={page === 0}
               aria-label="Predošlé objednávky"
@@ -371,7 +413,8 @@ export default function Kuchyna() {
               ‹
             </button>
             <button
-              className="pager right"
+              className={`pager right${pagerDole ? " dole" : ""}`}
+              style={{ top: pagerDole ? undefined : pagerTop }}
               onClick={() => setPage((p) => Math.min(pageCount - 1, p + 1))}
               disabled={page >= pageCount - 1}
               aria-label="Ďalšie objednávky"
@@ -380,7 +423,12 @@ export default function Kuchyna() {
               ›
             </button>
 
-            <div className="orders-grid">
+            <div
+              className="orders-grid"
+              key={page}
+              onPointerDown={handleSwipeStart}
+              onPointerUp={handleSwipeEnd}
+            >
               {visibleOrders.map((o) => {
                 const elapsedMs = Math.max(0, now - (o.timestamp || now));
                 const complete = isOrderComplete(o);
@@ -437,7 +485,7 @@ export default function Kuchyna() {
                             );
                             return [
                               <label key={key} className="row item">
-                                <span className="name">{nazov}</span>
+                                <span className="name" style={{ fontWeight: 800 }}>{nazov}</span>
                                 <input
                                   type="checkbox"
                                   checked={!!checked[o.id]?.[key]}

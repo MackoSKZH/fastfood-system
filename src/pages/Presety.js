@@ -1,9 +1,43 @@
 import { useEffect, useMemo, useState, Fragment } from "react";
 import { db } from "../firebase";
-import { ref, set, onValue, remove } from "firebase/database";
+import { ref, set, onValue, remove, update } from "firebase/database";
 import { useNavigate } from "react-router-dom";
+import { DndContext, closestCenter, PointerSensor, useSensor, useSensors } from "@dnd-kit/core";
+import { SortableContext, verticalListSortingStrategy, useSortable, arrayMove } from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import "./kiosk.css";
 import { ITEM_COLORS } from "./Kasa";
+
+// Tenký obal okolo useSortable – samotný obsah riadku/karty ostáva v Presety(),
+// len sa mu cez render-prop dodajú {attributes, listeners} pre úchytku.
+function SortableRow({ id, as: Tag = "tr", className, children }) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.6 : 1,
+  };
+  return (
+    <Tag ref={setNodeRef} style={style} className={className}>
+      {children({ attributes, listeners })}
+    </Tag>
+  );
+}
+
+function DragHandle({ attributes, listeners }) {
+  return (
+    <button
+      type="button"
+      className="k-btn"
+      style={{ padding: "2px 10px", cursor: "grab", touchAction: "none" }}
+      {...attributes}
+      {...listeners}
+      title="Podrž a presuň"
+    >
+      ⠿
+    </button>
+  );
+}
 
 export default function Presety() {
   const navigate = useNavigate();
@@ -39,12 +73,66 @@ export default function Presety() {
         nazov,
         cena: Number(v?.cena ?? 0),
         farba: (v?.farba != null) ? Number(v.farba) : null,
+        poradie: (v?.poradie != null) ? Number(v.poradie) : null,
         prilohy: Object.entries(v?.prilohy || {})
-          .map(([pn, pv]) => ({ nazov: pn, cena: Number(pv?.cena ?? 0) }))
-          .sort((a, b) => a.nazov.localeCompare(b.nazov, "sk")),
+          .map(([pn, pv]) => ({
+            nazov: pn,
+            cena: Number(pv?.cena ?? 0),
+            poradie: (pv?.poradie != null) ? Number(pv.poradie) : null,
+          }))
+          .sort((a, b) => {
+            const pa = a.poradie ?? Infinity;
+            const pb = b.poradie ?? Infinity;
+            if (pa !== pb) return pa - pb;
+            return a.nazov.localeCompare(b.nazov, "sk");
+          }),
       }))
-      .sort((a, b) => a.nazov.localeCompare(b.nazov, "sk"));
+      .sort((a, b) => {
+        const pa = a.poradie ?? Infinity;
+        const pb = b.poradie ?? Infinity;
+        if (pa !== pb) return pa - pb;
+        return a.nazov.localeCompare(b.nazov, "sk");
+      });
   }, [presety, vybranyPreset]);
+
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
+
+  // Zapíše poradie = index pre každú položku daného zoznamu, na dodanú Firebase cestu
+  // (buď presets/{preset} pre položky, alebo presets/{preset}/{polozka}/prilohy pre prílohy).
+  async function ulozitPoradie(noveNazvy, cesta) {
+    const updates = {};
+    noveNazvy.forEach((nazov, i) => {
+      updates[`${cesta}/${nazov}/poradie`] = i;
+    });
+    try {
+      await update(ref(db), updates);
+    } catch (err) {
+      alert("Poradie sa nepodarilo uložiť.");
+    }
+  }
+
+  function handleDragEnd(event) {
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+    const oldIndex = polozky.findIndex((p) => p.nazov === active.id);
+    const newIndex = polozky.findIndex((p) => p.nazov === over.id);
+    if (oldIndex === -1 || newIndex === -1) return;
+    ulozitPoradie(arrayMove(polozky.map((p) => p.nazov), oldIndex, newIndex), `presets/${vybranyPreset}`);
+  }
+
+  function handleDragEndPrilohy(itemNazov, prilohyList) {
+    return (event) => {
+      const { active, over } = event;
+      if (!over || active.id === over.id) return;
+      const oldIndex = prilohyList.findIndex((p) => p.nazov === active.id);
+      const newIndex = prilohyList.findIndex((p) => p.nazov === over.id);
+      if (oldIndex === -1 || newIndex === -1) return;
+      ulozitPoradie(
+        arrayMove(prilohyList.map((p) => p.nazov), oldIndex, newIndex),
+        `presets/${vybranyPreset}/${itemNazov}/prilohy`
+      );
+    };
+  }
 
   const hasForbidden = (s) => /[.#$/[\]]/.test(s);
   const trimText = (s) => s.trim();
@@ -93,7 +181,7 @@ export default function Presety() {
     if (!window.confirm(`Vymazať '${nazov}' z '${vybranyPreset}'?`)) return;
     try {
       await remove(ref(db, `presets/${vybranyPreset}/${nazov}`));
-      if (editRadok?.nazov === nazov) setEditRadok(null);
+      if (editRadok?.povodnyNazov === nazov) setEditRadok(null);
       if (expandedItem === nazov) setExpandedItem(null);
     } catch (err) {
       alert("Položku sa nepodarilo vymazať.");
@@ -101,15 +189,31 @@ export default function Presety() {
   }
 
   function startEdit(nazov, cena) {
-    setEditRadok({ nazov, cena: String(cena) });
+    setEditRadok({ povodnyNazov: nazov, nazov, cena: String(cena) });
   }
 
   async function ulozitEdit() {
     if (!editRadok) return;
+    const povodnyNazov = editRadok.povodnyNazov;
+    const novyNazov = trimText(editRadok.nazov);
     const parsed = parseFloat(String(editRadok.cena).replace(",", "."));
+    if (!novyNazov) return alert("Zadaj názov položky.");
+    if (hasForbidden(novyNazov)) return alert("Názov položky obsahuje zakázané znaky: . # $ [ ] /");
     if (!isFinite(parsed) || parsed < 0) return alert("Zadaj platnú cenu.");
     try {
-      await set(ref(db, `presets/${vybranyPreset}/${editRadok.nazov}/cena`), parsed);
+      if (novyNazov !== povodnyNazov) {
+        if (presety[vybranyPreset]?.[novyNazov]) {
+          return alert(`Položka '${novyNazov}' už v tomto presete existuje.`);
+        }
+        const existujuce = presety[vybranyPreset]?.[povodnyNazov] || {};
+        const updates = {};
+        updates[`presets/${vybranyPreset}/${novyNazov}`] = { ...existujuce, cena: parsed };
+        updates[`presets/${vybranyPreset}/${povodnyNazov}`] = null;
+        await update(ref(db), updates);
+        if (expandedItem === povodnyNazov) setExpandedItem(novyNazov);
+      } else {
+        await set(ref(db, `presets/${vybranyPreset}/${povodnyNazov}/cena`), parsed);
+      }
       setEditRadok(null);
     } catch (err) {
       alert("Zmenu sa nepodarilo uložiť.");
@@ -176,7 +280,7 @@ export default function Presety() {
             position: "absolute", top: 36, left: 0, zIndex: 50,
             background: "#fff", border: "1px solid #e5e7eb", borderRadius: 10,
             padding: 8, boxShadow: "0 4px 16px rgba(0,0,0,.14)",
-            display: "flex", flexWrap: "wrap", gap: 5, width: 172,
+            display: "flex", flexWrap: "wrap", gap: 5, width: 232,
           }}>
             <div
               onClick={() => { ulozitFarbu(nazov, null); setPickerOpenFor(null); }}
@@ -211,15 +315,26 @@ export default function Presety() {
       <div style={{ marginTop: 8, paddingLeft: 12, borderLeft: "3px solid var(--k-primary)" }}>
         {item.prilohy.length > 0 && (
           <div style={{ marginBottom: 8 }}>
-            {item.prilohy.map((p) => (
-              <div key={p.nazov} className="k-row" style={{ justifyContent: "space-between", padding: "3px 0" }}>
-                <span>↳ {p.nazov}</span>
-                <div className="k-row" style={{ gap: 8 }}>
-                  <span className="k-help">€{p.cena.toFixed(2)}</span>
-                  <button className="k-btn" style={{ padding: "3px 8px" }} onClick={() => vymazPrilohu(item.nazov, p.nazov)}>🗑️</button>
-                </div>
-              </div>
-            ))}
+            <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEndPrilohy(item.nazov, item.prilohy)}>
+              <SortableContext items={item.prilohy.map((p) => p.nazov)} strategy={verticalListSortingStrategy}>
+                {item.prilohy.map((p) => (
+                  <SortableRow id={p.nazov} as="div" key={p.nazov}>
+                    {({ attributes, listeners }) => (
+                      <div className="k-row" style={{ justifyContent: "space-between", padding: "3px 0" }}>
+                        <div className="k-row" style={{ gap: 6 }}>
+                          <DragHandle attributes={attributes} listeners={listeners} />
+                          <span>{p.nazov}</span>
+                        </div>
+                        <div className="k-row" style={{ gap: 8 }}>
+                          <span className="k-help">€{p.cena.toFixed(2)}</span>
+                          <button className="k-btn" style={{ padding: "3px 8px" }} onClick={() => vymazPrilohu(item.nazov, p.nazov)}>🗑️</button>
+                        </div>
+                      </div>
+                    )}
+                  </SortableRow>
+                ))}
+              </SortableContext>
+            </DndContext>
           </div>
         )}
         <div className="k-row" style={{ flexWrap: "wrap", gap: 6 }}>
@@ -349,9 +464,12 @@ export default function Presety() {
                   {/* PC: tabuľka */}
                   <div className="hide-mobile" style={{ marginTop: 12 }}>
                     <div className="k-scroll-x">
+                      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+                      <SortableContext items={polozky.map((p) => p.nazov)} strategy={verticalListSortingStrategy}>
                       <table className="k-table">
                         <thead>
                           <tr>
+                            <th style={{ width: 50 }}></th>
                             <th>Položka</th>
                             <th style={{ width: 160 }}>Cena</th>
                             <th style={{ width: 180 }}>Farba</th>
@@ -361,12 +479,30 @@ export default function Presety() {
                         <tbody>
                           {polozky.map((item) => {
                             const { nazov, cena, prilohy } = item;
-                            const editing = editRadok?.nazov === nazov;
+                            const editing = editRadok?.povodnyNazov === nazov;
                             const expanded = expandedItem === nazov;
                             return (
                               <Fragment key={nazov}>
-                                <tr>
-                                  <td>{nazov}</td>
+                                <SortableRow id={nazov}>
+                                  {({ attributes, listeners }) => (
+                                    <>
+                                  <td>
+                                    <DragHandle attributes={attributes} listeners={listeners} />
+                                  </td>
+                                  <td>
+                                    {editing ? (
+                                      <input
+                                        className="k-input"
+                                        value={editRadok.nazov}
+                                        onChange={(e) => setEditRadok((s) => ({ ...s, nazov: e.target.value }))}
+                                        onKeyDown={(e) => e.key === "Enter" && ulozitEdit()}
+                                        style={{ width: 160 }}
+                                        autoFocus
+                                      />
+                                    ) : (
+                                      nazov
+                                    )}
+                                  </td>
                                   <td>
                                     {editing ? (
                                       <input
@@ -378,7 +514,6 @@ export default function Presety() {
                                         step="0.01"
                                         min="0"
                                         style={{ width: 120 }}
-                                        autoFocus
                                       />
                                     ) : (
                                       <>€{cena.toFixed(2)}</>
@@ -408,10 +543,12 @@ export default function Presety() {
                                       )}
                                     </div>
                                   </td>
-                                </tr>
+                                    </>
+                                  )}
+                                </SortableRow>
                                 {expanded && (
                                   <tr>
-                                    <td colSpan={3} style={{ background: "#fafafa", padding: "8px 16px" }}>
+                                    <td colSpan={4} style={{ background: "#fafafa", padding: "8px 16px" }}>
                                       {renderPrilohyPanel(item)}
                                     </td>
                                   </tr>
@@ -421,25 +558,40 @@ export default function Presety() {
                           })}
                         </tbody>
                       </table>
+                      </SortableContext>
+                      </DndContext>
                     </div>
                   </div>
 
                   {/* Mobil */}
                   <div className="hide-desktop" style={{ marginTop: 12 }}>
                     <div className="k-vcards">
+                      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+                      <SortableContext items={polozky.map((p) => p.nazov)} strategy={verticalListSortingStrategy}>
                       {polozky.map((item) => {
                         const { nazov, cena, prilohy } = item;
-                        const editing = editRadok?.nazov === nazov;
+                        const editing = editRadok?.povodnyNazov === nazov;
                         const expanded = expandedItem === nazov;
                         return (
-                          <div className="k-item-card" key={nazov}>
+                          <SortableRow id={nazov} as="div" className="k-item-card" key={nazov}>
+                            {({ attributes, listeners }) => (
+                              <>
                             <div className="k-item-head">
-                              <strong style={{ wordBreak: "break-word" }}>{nazov}</strong>
+                              <DragHandle attributes={attributes} listeners={listeners} />
+                              {!editing && <strong style={{ wordBreak: "break-word" }}>{nazov}</strong>}
                               {!editing && <span className="k-price">€{cena.toFixed(2)}</span>}
                             </div>
 
                             {editing && (
-                              <div className="k-row" style={{ marginTop: 8 }}>
+                              <div className="k-row" style={{ marginTop: 8, flexWrap: "wrap" }}>
+                                <input
+                                  className="k-input"
+                                  value={editRadok.nazov}
+                                  onChange={(e) => setEditRadok((s) => ({ ...s, nazov: e.target.value }))}
+                                  onKeyDown={(e) => e.key === "Enter" && ulozitEdit()}
+                                  style={{ flex: 1, minWidth: 140 }}
+                                  autoFocus
+                                />
                                 <input
                                   className="k-input"
                                   type="number"
@@ -449,7 +601,6 @@ export default function Presety() {
                                   step="0.01"
                                   min="0"
                                   style={{ width: 140 }}
-                                  autoFocus
                                 />
                               </div>
                             )}
@@ -478,9 +629,13 @@ export default function Presety() {
                             </div>
 
                             {expanded && renderPrilohyPanel(item)}
-                          </div>
+                              </>
+                            )}
+                          </SortableRow>
                         );
                       })}
+                      </SortableContext>
+                      </DndContext>
                     </div>
                   </div>
                 </>
