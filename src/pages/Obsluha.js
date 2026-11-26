@@ -312,12 +312,16 @@ export default function Obsluha() {
                           : rec.suma || "—"}
                       </td>
                       <td>
-                        <button
-                          className="k-btn k-btn--success"
-                          onClick={() => oznacitPrevzate(rec.id, hasPager(rec) ? rec.vysielac : null, rec.orderNumber, isQrOrder(rec) ? rec.objednavkaId : null)}
-                        >
-                          Prevzaté
-                        </button>
+                        {isTicketOrder(rec) ? (
+                          <span className="k-help">Platba na kase</span>
+                        ) : (
+                          <button
+                            className="k-btn k-btn--success"
+                            onClick={() => oznacitPrevzate(rec.id, hasPager(rec) ? rec.vysielac : null, rec.orderNumber, isQrOrder(rec) ? rec.objednavkaId : null)}
+                          >
+                            Prevzaté
+                          </button>
+                        )}
                       </td>
                     </tr>
                   );
@@ -381,12 +385,16 @@ export default function Obsluha() {
                     </div>
                   </div>
 
-                  <button
-                    className="o-btn-primary"
-                    onClick={() => oznacitPrevzate(rec.id, hasPager(rec) ? rec.vysielac : null, rec.orderNumber, isQrOrder(rec) ? rec.objednavkaId : null)}
-                  >
-                    Prevzaté
-                  </button>
+                  {isTicketOrder(rec) ? (
+                    <p className="k-help" style={{ margin: 0 }}>Platba na kase</p>
+                  ) : (
+                    <button
+                      className="o-btn-primary"
+                      onClick={() => oznacitPrevzate(rec.id, hasPager(rec) ? rec.vysielac : null, rec.orderNumber, isQrOrder(rec) ? rec.objednavkaId : null)}
+                    >
+                      Prevzaté
+                    </button>
+                  )}
                 </article>
               );
             })}

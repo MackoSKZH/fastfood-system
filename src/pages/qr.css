@@ -80,6 +80,7 @@
 .qr-notes .k-btn { min-width: 76px; min-height: 48px; }
 .qr-lang { display: grid; gap: 12px; margin-top: 8px; }
 .qr-lang .k-btn { min-height: 88px; font-size: 1.4rem; }
+.k-btn.success { background: var(--k-success, #16A34A); color: #fff; border-color: #128a3c; }
 .qr-page.is-kiosk .qr-lang { grid-template-columns: 1fr 1fr; }
 .qr-page.is-kiosk .qr-lang .k-btn { min-height: 160px; font-size: 2rem; }
 .qr-pay-input {
@@ -125,6 +126,7 @@
 }
 .qr-page.is-kiosk .qr-footer-inner { max-width: 1080px; }
 .qr-page.is-kiosk .qr-top { padding-right: 280px; }
+.qr-page.is-kiosk.is-locked .qr-top { padding-right: 16px; }
 .qr-page.is-kiosk .qr-menu {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 14px;

@@ -16,10 +16,8 @@ import "./qr.css";
 const MAX_PORCII = 12;
 const MAX_SUMA = 80;
 const MAX_SIDE = 5;
-const MAX_PAID = 500;
 const COOLDOWN_MS = 60_000;
 const RECEIPT_TTL = 2 * 60 * 60 * 1000;
-const BANKOVKY = [5, 10, 20, 50, 100];
 const KIOSK_PRINT_WIDTH = 576;
 const KIOSK_RESET_MS = 20_000;
 
@@ -32,15 +30,6 @@ function money(n) {
   return Number.isFinite(x) ? x : 0;
 }
 
-function parseMoney(raw) {
-  const text = String(raw ?? "").trim().replace(/\s/g, "").replace(",", ".");
-  if (!text || text === ".") return null;
-  if (!/^\d*\.?\d*$/.test(text)) return null;
-  const n = Number(text);
-  if (!Number.isFinite(n) || n < 0) return null;
-  return round2(n);
-}
-
 function langStorageKey(sessionCode) {
   return `qrLang:${sessionCode}`;
 }
@@ -48,7 +37,7 @@ function langStorageKey(sessionCode) {
 function readLang(sessionCode, isKiosk) {
   if (isKiosk || !sessionCode) return null;
   try {
-    const value = sessionStorage.getItem(langStorageKey(sessionCode));
+    const value = localStorage.getItem(langStorageKey(sessionCode));
     return value === "en" || value === "sk" ? value : null;
   } catch {
     return null;
@@ -101,14 +90,29 @@ function readLastOrder(sessionCode) {
   return Number.isFinite(n) ? n : 0;
 }
 
+function forgetReceipt(sessionCode) {
+  if (!sessionCode) return;
+  try {
+    localStorage.removeItem(receiptKey(sessionCode));
+    sessionStorage.removeItem(receiptKey(sessionCode));
+  } catch {}
+}
+
 function readReceipt(sessionCode) {
   if (!sessionCode) return null;
   try {
-    const raw = sessionStorage.getItem(receiptKey(sessionCode));
+    let raw = localStorage.getItem(receiptKey(sessionCode));
+    if (!raw) {
+      raw = sessionStorage.getItem(receiptKey(sessionCode));
+      if (raw) localStorage.setItem(receiptKey(sessionCode), raw);
+    }
+    sessionStorage.removeItem(receiptKey(sessionCode));
     if (!raw) return null;
     const parsed = JSON.parse(raw);
-    if (!parsed?.orderNumber) return null;
-    if (Date.now() - Number(parsed.timestamp || 0) > RECEIPT_TTL) return null;
+    if (!parsed?.orderNumber || Date.now() - Number(parsed.timestamp || 0) > RECEIPT_TTL) {
+      forgetReceipt(sessionCode);
+      return null;
+    }
     return parsed;
   } catch {
     return null;
@@ -138,8 +142,6 @@ function buildKioskReceipt(receipt, nazovPodniku) {
     createdAt: receipt.timestamp,
     riadky,
     suma: receipt.suma,
-    zaplatene: receipt.zaplatene,
-    vydaj: receipt.vydaj,
   };
 }
 
@@ -156,7 +158,6 @@ export default function QrObjednavka({ variant = "qr" }) {
   const [menuState, setMenuState] = useState("idle");
   const [cart, setCart] = useState({});
   const [step, setStep] = useState(savedReceipt ? "hotovo" : "menu");
-  const [zaplateneText, setZaplateneText] = useState("");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState("");
   const [receipt, setReceipt] = useState(savedReceipt);
@@ -167,6 +168,7 @@ export default function QrObjednavka({ variant = "qr" }) {
   const [printError, setPrintError] = useState("");
   const [printerReady, setPrinterReady] = useState(false);
   const [lang, setLang] = useState(() => readLang(sessionCode, isKiosk));
+  const [kioskLocked, setKioskLocked] = useState(false);
   const sendingRef = useRef(false);
   const printedFor = useRef(null);
 
@@ -177,7 +179,6 @@ export default function QrObjednavka({ variant = "qr" }) {
     setQrStav("kuchyna");
     setStep(nextReceipt ? "hotovo" : "menu");
     setCart({});
-    setZaplateneText("");
     setError("");
     setPrintState("idle");
     setPrintError("");
@@ -211,6 +212,31 @@ export default function QrObjednavka({ variant = "qr" }) {
   }, [step]);
 
   useEffect(() => {
+    if (!isKiosk || !sessionCode) return undefined;
+    const off = onValue(ref(db, `sessions/${sessionCode}/kioskLock`), (snap) => {
+      const locked = snap.val() === true;
+      setKioskLocked(locked);
+      if (locked) {
+        document.documentElement.requestFullscreen?.().catch(() => {});
+      } else if (document.fullscreenElement) {
+        document.exitFullscreen?.().catch(() => {});
+      }
+    });
+    return () => off();
+  }, [isKiosk, sessionCode]);
+
+  useEffect(() => {
+    if (!isKiosk || !kioskLocked) return undefined;
+    function keepFullscreen() {
+      if (!document.fullscreenElement) {
+        document.documentElement.requestFullscreen?.().catch(() => {});
+      }
+    }
+    document.addEventListener("pointerdown", keepFullscreen);
+    return () => document.removeEventListener("pointerdown", keepFullscreen);
+  }, [isKiosk, kioskLocked]);
+
+  useEffect(() => {
     if (!isKiosk) return undefined;
     let cancelled = false;
     prepareWebSerialPort()
@@ -224,7 +250,6 @@ export default function QrObjednavka({ variant = "qr" }) {
     const id = setTimeout(() => {
       setReceipt(null);
       setCart({});
-      setZaplateneText("");
       setError("");
       setPrintState("idle");
       setPrintError("");
@@ -327,12 +352,7 @@ export default function QrObjednavka({ variant = "qr" }) {
 
   const portions = lines.reduce((sum, line) => sum + line.qty, 0);
   const suma = round2(lines.reduce((sum, line) => sum + line.lineSum, 0));
-  const zaplatene = parseMoney(zaplateneText);
-  const vydaj = zaplatene == null ? null : round2(zaplatene - suma);
   const cooldownLeft = isKiosk ? 0 : Math.max(0, COOLDOWN_MS - (now - lastOrderAt));
-  const exact = zaplatene != null && portions > 0 && zaplatene === suma;
-  const typed = zaplateneText.trim();
-  const invalidTyped = typed !== "" && zaplatene == null;
 
   const open = sessionState === "ready" && menuState === "ready" && !!preset && menu.length > 0;
   const loading = sessionState === "loading" || (sessionState === "ready" && !!preset && menuState === "loading");
@@ -374,18 +394,13 @@ export default function QrObjednavka({ variant = "qr" }) {
     if (portions < 1) return text.needOne;
     if (portions > MAX_PORCII) return text.maxPortions;
     if (suma > MAX_SUMA) return text.maxSum;
-    if (invalidTyped) return text.badAmount;
-    if (zaplatene == null) return text.needNote;
-    if (zaplatene > MAX_PAID) return text.maxPaid;
-    if (zaplatene < suma) return `${text.short} €${round2(suma - zaplatene).toFixed(2)}.`;
     return "";
   }
 
   function novaObjednavka() {
-    if (!isKiosk) sessionStorage.removeItem(receiptKey(sessionCode));
+    if (!isKiosk) forgetReceipt(sessionCode);
     setReceipt(null);
     setCart({});
-    setZaplateneText("");
     setError("");
     setPrintState("idle");
     setPrintError("");
@@ -395,7 +410,7 @@ export default function QrObjednavka({ variant = "qr" }) {
 
   function chooseLang(next) {
     setLang(next);
-    if (!isKiosk) sessionStorage.setItem(langStorageKey(sessionCode), next);
+    if (!isKiosk) localStorage.setItem(langStorageKey(sessionCode), next);
   }
 
   async function printKioskTicket(ticket, isActive = () => true) {
@@ -516,8 +531,6 @@ export default function QrObjednavka({ variant = "qr" }) {
         polozky,
         ...(Object.keys(prilohy).length ? { prilohy } : {}),
         suma,
-        zaplatene,
-        vydaj,
         status: "waiting",
         timestamp,
       });
@@ -534,8 +547,6 @@ export default function QrObjednavka({ variant = "qr" }) {
         orderId: newRef.key,
         orderNumber,
         suma,
-        zaplatene,
-        vydaj,
         timestamp,
         lines: lines.map((line) => ({
           nazov: line.nazov,
@@ -552,13 +563,12 @@ export default function QrObjednavka({ variant = "qr" }) {
         })),
       };
       if (!isKiosk) {
-        sessionStorage.setItem(receiptKey(sessionCode), JSON.stringify(snapshot));
+        localStorage.setItem(receiptKey(sessionCode), JSON.stringify(snapshot));
         localStorage.setItem(cooldownKey(sessionCode), String(stamped));
         setLastOrderAt(stamped);
       }
       setReceipt(snapshot);
       setCart({});
-      setZaplateneText("");
       setStep("hotovo");
     } catch (err) {
       console.error("QR objednávka zlyhala:", err);
@@ -578,7 +588,7 @@ export default function QrObjednavka({ variant = "qr" }) {
   }
 
   function kioskStaffBar() {
-    if (!isKiosk) return null;
+    if (!isKiosk || kioskLocked) return null;
     return (
       <div className="kiosk-tools">
         <button type="button" className="k-btn" onClick={connectPrinter} title={printerReady ? "Tlačiareň je pripravená" : "Vyber sériový port"}>
@@ -590,9 +600,10 @@ export default function QrObjednavka({ variant = "qr" }) {
   }
 
   const copy = customerCopy(lang || "sk");
-  const shell = isKiosk ? "qr-page is-kiosk" : "qr-page";
+  const shell = isKiosk ? `qr-page is-kiosk${kioskLocked ? " is-locked" : ""}` : "qr-page";
+  const hasStoredReceipt = !isKiosk && step === "hotovo" && receipt;
 
-  if (!lang) {
+  if (!lang && !hasStoredReceipt) {
     return (
       <div className={shell}>
         <header className="qr-top">
@@ -647,11 +658,6 @@ export default function QrObjednavka({ variant = "qr" }) {
             <span>{copy.total}</span>
             <strong>€{money(receipt.suma).toFixed(2)}</strong>
           </div>
-          <div className="qr-line">
-            <span>{copy.youPay}</span>
-            <strong>€{money(receipt.zaplatene).toFixed(2)}</strong>
-          </div>
-          <p className="qr-vydaj ok">{copy.changeBack} €{money(receipt.vydaj).toFixed(2)}</p>
           <button type="button" className="k-btn" onClick={novaObjednavka}>
             {copy.nextGuest}
           </button>
@@ -708,11 +714,7 @@ export default function QrObjednavka({ variant = "qr" }) {
             <span>{copy.total}</span>
             <strong>€{money(receipt.suma).toFixed(2)}</strong>
           </div>
-          <div className="qr-line">
-            <span>{copy.youPay}</span>
-            <strong>€{money(receipt.zaplatene).toFixed(2)}</strong>
-          </div>
-          <p className="qr-vydaj ok">{copy.changeBack} €{money(receipt.vydaj).toFixed(2)}</p>
+          <p className="qr-lead" style={{ marginTop: 8 }}>{copy.payWhenPickup}</p>
           <button type="button" className="k-btn" onClick={novaObjednavka}>
             {copy.newOrder}
           </button>
@@ -776,9 +778,9 @@ export default function QrObjednavka({ variant = "qr" }) {
       <header className="qr-top">
           {kioskStaffBar()}
         <div className="qr-kicker">
-          {step === "menu" ? copy.menu : step === "platba" ? copy.payStep : copy.confirmStep}
+          {step === "menu" ? copy.menu : copy.confirmStep}
         </div>
-        <h1>{step === "menu" ? preset : step === "platba" ? copy.cashTitle : copy.reviewTitle}</h1>
+        <h1>{step === "menu" ? preset : copy.reviewTitle}</h1>
         <p>{copy.payLead}</p>
       </header>
 
@@ -869,54 +871,6 @@ export default function QrObjednavka({ variant = "qr" }) {
         </div>
       )}
 
-      {step === "platba" && (
-        <section className="k-panel">
-          <div className="k-help">{copy.totalDue}</div>
-          <div className="qr-total">€{suma.toFixed(2)}</div>
-          <p>{copy.noteHelp}</p>
-          <div className="qr-notes" role="group" aria-label={copy.notes}>
-            {BANKOVKY.map((note) => (
-              <button
-                key={note}
-                type="button"
-                className={`k-btn${!exact && zaplatene === note ? " primary" : ""}`}
-                onClick={() => setZaplateneText(String(note))}
-              >
-                {note} €
-              </button>
-            ))}
-            <button
-              type="button"
-              className={`k-btn${exact ? " primary" : ""}`}
-              onClick={() => setZaplateneText(suma.toFixed(2))}
-            >
-              {copy.exact}
-            </button>
-          </div>
-          <label htmlFor="qr-zaplatene" className="k-help" style={{ display: "block", marginTop: 12 }}>
-            {copy.pays}
-          </label>
-          <input
-            id="qr-zaplatene"
-            className="k-input qr-pay-input"
-            inputMode="decimal"
-            autoComplete="off"
-            value={zaplateneText}
-            onChange={(e) => setZaplateneText(e.target.value)}
-            placeholder={copy.amountPh}
-          />
-          {invalidTyped && <p className="qr-vydaj bad">{copy.badAmount}</p>}
-          {!invalidTyped && zaplatene != null && zaplatene > MAX_PAID && (
-            <p className="qr-vydaj bad">{copy.maxPaid}</p>
-          )}
-          {!invalidTyped && zaplatene != null && zaplatene <= MAX_PAID && (
-            <p className={`qr-vydaj ${vydaj >= 0 ? "ok" : "bad"}`} aria-live="polite">
-              {vydaj >= 0 ? `${copy.give} €${vydaj.toFixed(2)}` : `${copy.short} €${Math.abs(vydaj).toFixed(2)}`}
-            </p>
-          )}
-        </section>
-      )}
-
       {step === "potvrdenie" && (
         <section className="k-panel qr-lines">
           {lines.map((line) => (
@@ -936,15 +890,6 @@ export default function QrObjednavka({ variant = "qr" }) {
             <span>{copy.total}</span>
             <strong>€{suma.toFixed(2)}</strong>
           </div>
-          <div className="qr-line">
-            <span>{copy.note}</span>
-            <strong>€{zaplatene == null ? "—" : zaplatene.toFixed(2)}</strong>
-          </div>
-          {vydaj != null && (
-            <p className={`qr-vydaj ${vydaj >= 0 ? "ok" : "bad"}`}>
-              {vydaj >= 0 ? `${copy.give} €${vydaj.toFixed(2)}` : `${copy.short} €${Math.abs(vydaj).toFixed(2)}`}
-            </p>
-          )}
           <p style={{ margin: 0 }}>{copy.kitchenNote}</p>
         </section>
       )}
@@ -967,26 +912,10 @@ export default function QrObjednavka({ variant = "qr" }) {
                 type="button"
                 className="k-btn primary qr-go"
                 disabled={portions < 1 || portions > MAX_PORCII || suma > MAX_SUMA}
-                onClick={() => setStep("platba")}
+                onClick={() => { setError(""); setStep("potvrdenie"); }}
               >
-                {copy.continue}
+                {copy.review}
               </button>
-            </>
-          )}
-
-          {step === "platba" && (
-            <>
-              <div className="qr-actions">
-                <button type="button" className="k-btn" onClick={() => setStep("menu")}>{copy.back}</button>
-                <button
-                  type="button"
-                  className="k-btn primary"
-                  disabled={!!payReason}
-                  onClick={() => { setError(""); setStep("potvrdenie"); }}
-                >
-                  {copy.review}
-                </button>
-              </div>
             </>
           )}
 
@@ -996,12 +925,12 @@ export default function QrObjednavka({ variant = "qr" }) {
                 <div className="qr-hint bad" aria-live="polite">{error || confirmReason}</div>
               )}
               <div className="qr-actions">
-                <button type="button" className="k-btn" onClick={() => { setError(""); setStep("platba"); }} disabled={sending}>
+                <button type="button" className="k-btn" onClick={() => { setError(""); setStep("menu"); }} disabled={sending}>
                   {copy.back}
                 </button>
                 <button
                   type="button"
-                  className="k-btn accent"
+                  className="k-btn success"
                   disabled={confirmBlocked}
                   onClick={odoslat}
                 >

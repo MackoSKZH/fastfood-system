@@ -4,6 +4,7 @@ import {
   ref,
   set,
   push,
+  update,
   onValue,
   runTransaction,
   onDisconnect,
@@ -26,6 +27,42 @@ import { writeQrStav } from "../lib/qrStav";
 import QrLinkModal from "../components/QrLinkModal";
 
 const VIP_VYSIELACE = ["01", "02", "03", "04"];
+const VYDEJ_BANKOVKY = [100, 50, 20, 10, 5];
+const VYDEJ_MINCE = [2, 1, 0.5, 0.2, 0.1, 0.05];
+
+function formatMinca(value) {
+  return value >= 1 ? `${value}€` : `${Math.round(value * 100)}c`;
+}
+
+function VydejHotovost({ suma, zaplatene, busy, onAdd, onReset, onConfirm }) {
+  const ciel = Number(suma) || 0;
+  const vydaj = Math.round((zaplatene - ciel) * 100) / 100;
+  const ok = zaplatene + 0.001 >= ciel;
+  return (
+    <div className="k-vydej">
+      <div className="k-row" style={{ flexWrap: "wrap", gap: 4 }}>
+        {VYDEJ_BANKOVKY.map((note) => (
+          <button key={note} type="button" className="k-btn" onClick={() => onAdd(note)}>{note}€</button>
+        ))}
+      </div>
+      <div className="k-row" style={{ flexWrap: "wrap", gap: 4, marginTop: 4 }}>
+        {VYDEJ_MINCE.map((coin) => (
+          <button key={coin} type="button" className="k-btn" onClick={() => onAdd(coin)}>{formatMinca(coin)}</button>
+        ))}
+        <button type="button" className="k-btn" onClick={onReset}>Reset</button>
+      </div>
+      <div className="k-row" style={{ justifyContent: "space-between", marginTop: 8 }}>
+        <span className="k-help">Zaplatené: <strong>€{zaplatene.toFixed(2)}</strong></span>
+        <strong style={{ color: ok ? "#16a34a" : "#dc2626" }}>
+          {ok ? `Vydať: €${vydaj.toFixed(2)}` : `Chýba: €${Math.abs(vydaj).toFixed(2)}`}
+        </strong>
+      </div>
+      <button type="button" className="k-btn success" style={{ marginTop: 8, width: "100%" }} disabled={!ok || busy} onClick={onConfirm}>
+        Odovzdať
+      </button>
+    </div>
+  );
+}
 
 export const ITEM_COLORS = [
   { bg: '#FEF3C7', border: '#F59E0B', btn: '#D97706' },
@@ -80,6 +117,10 @@ export default function Kasa() {
   const [rieseneMap, setRieseneMap] = useState({});
   const [now, setNow] = useState(Date.now());
   const [zaplatene, setZaplatene] = useState(0);
+  const [vydejId, setVydejId] = useState(null);
+  const [vydejSuma, setVydejSuma] = useState(0);
+  const [vydejBusy, setVydejBusy] = useState(false);
+  const [kioskLocked, setKioskLocked] = useState(false);
   const [poslednyBlok, setPoslednyBlok] = useState(null);
   const [tlacim, setTlacim] = useState(false);
   const stiahnutyBlokIdRef = useRef(null);
@@ -114,6 +155,14 @@ export default function Kasa() {
     });
     return () => off();
   }, []);
+
+  useEffect(() => {
+    if (!session) return undefined;
+    const off = onValue(ref(db, `sessions/${session}/kioskLock`), (snap) => {
+      setKioskLocked(snap.val() === true);
+    });
+    return () => off();
+  }, [session]);
 
   useEffect(() => {
     if (!session) return;
@@ -242,6 +291,80 @@ export default function Kasa() {
     const m = Math.floor(diff / 60);
     if (m < 60) return `${m}m`;
     return `${Math.floor(m / 60)}h`;
+  }
+
+  function otvoritVydej(rec) {
+    setVydejId(rec.id);
+    setVydejSuma(0);
+  }
+
+  async function dokocitVydej(rec) {
+    if (!session || vydejBusy) return;
+    const suma = Number(rec.suma) || 0;
+    if (vydejSuma + 0.001 < suma) return;
+    const vydaj = Math.round((vydejSuma - suma) * 100) / 100;
+    setVydejBusy(true);
+    try {
+      await update(ref(db), {
+        [`sessions/${session}/log/${rec.id}/zaplatene`]: vydejSuma,
+        [`sessions/${session}/log/${rec.id}/vydaj`]: vydaj,
+      });
+      await oznacitPrevzate(
+        rec.id,
+        hasPager(rec) ? rec.vysielac : null,
+        rec.orderNumber,
+        isQrOrder(rec) ? rec.objednavkaId : null
+      );
+      setVydejId(null);
+      setVydejSuma(0);
+    } catch (err) {
+      console.error("Hotovosť pri výdaji sa nepodarilo uložiť:", err);
+      alert("Hotovosť sa nepodarilo uložiť.");
+    } finally {
+      setVydejBusy(false);
+    }
+  }
+
+  function tlacidloOdovzdat(rec) {
+    if (!isTicketOrder(rec)) {
+      return (
+        <button
+          type="button"
+          className="k-btn success"
+          style={{ width: "100%" }}
+          onClick={() => oznacitPrevzate(rec.id, hasPager(rec) ? rec.vysielac : null, rec.orderNumber, isQrOrder(rec) ? rec.objednavkaId : null)}
+        >
+          Odovzdať
+        </button>
+      );
+    }
+    if (vydejId !== rec.id) {
+      return (
+        <button type="button" className="k-btn success" style={{ width: "100%" }} onClick={() => otvoritVydej(rec)}>
+          Odovzdať
+        </button>
+      );
+    }
+    return (
+      <VydejHotovost
+        suma={rec.suma}
+        zaplatene={vydejSuma}
+        busy={vydejBusy}
+        onAdd={(amount) => setVydejSuma((prev) => Math.round((prev + amount) * 100) / 100)}
+        onReset={() => setVydejSuma(0)}
+        onConfirm={() => dokocitVydej(rec)}
+      />
+    );
+  }
+
+  async function prepnoutKiosk() {
+    if (!session) return;
+    try {
+      await set(ref(db, `sessions/${session}/kioskLock`), !kioskLocked);
+    } catch (err) {
+      console.error("Zámok kiosku sa nepodarilo uložiť:", err);
+      alert("Kiosk sa nepodarilo prepnúť.");
+    }
   }
 
   async function oznacitPrevzate(id, vys = null, orderNumber = null, qrOrderId = null) {
@@ -582,6 +705,9 @@ export default function Kasa() {
               <button className="btn" onClick={() => setShowInfo(true)}>Info</button>
               <button className="k-btn" onClick={() => setShowHistory(true)}>História</button>
               <button className="k-btn" onClick={() => setShowQr(true)}>QR objednávka</button>
+              <button className={`k-btn${kioskLocked ? " success" : ""}`} onClick={prepnoutKiosk}>
+                {kioskLocked ? "Odomknúť kiosk" : "Zamknúť kiosk"}
+              </button>
               <button className="k-btn" onClick={goToPresety}>Presety</button>
               {vsetkyPresety.length ? (
                 <select
@@ -872,14 +998,7 @@ export default function Kasa() {
                               <div>{items || "—"}{prilohy && <span className="k-help"> · ↳ {prilohy}</span>}</div>
                             </td>
                             <td>{typeof rec.suma === "number" ? rec.suma.toFixed(2) + " €" : rec.suma || "—"}</td>
-                            <td>
-                              <button
-                                className="k-btn k-btn--success"
-                                onClick={() => oznacitPrevzate(rec.id, hasPager(rec) ? rec.vysielac : null, rec.orderNumber, isQrOrder(rec) ? rec.objednavkaId : null)}
-                              >
-                                Odovzdať
-                              </button>
-                            </td>
+                            <td>{tlacidloOdovzdat(rec)}</td>
                           </tr>
                         );
                       })}
@@ -939,12 +1058,7 @@ export default function Kasa() {
                             {typeof rec.suma === "number" ? rec.suma.toFixed(2) + " €" : rec.suma || "—"}
                           </div>
                         </div>
-                        <button
-                          className="o-btn-primary"
-                          onClick={() => oznacitPrevzate(rec.id, hasPager(rec) ? rec.vysielac : null, rec.orderNumber, isQrOrder(rec) ? rec.objednavkaId : null)}
-                        >
-                          Odovzdať
-                        </button>
+                        {tlacidloOdovzdat(rec)}
                       </article>
                     );
                   })}
