@@ -27,7 +27,7 @@ function byteEncodeRowMSB(row, widthBytes) {
   return out;
 }
 
-export function buildEscPosReceipt(canvas) {
+export function buildEscPosReceipt(canvas, { cut = false } = {}) {
   const ctx = canvas.getContext("2d");
   const width = canvas.width;
   const height = canvas.height;
@@ -53,6 +53,8 @@ export function buildEscPosReceipt(canvas) {
     height & 0xff, (height >> 8) & 0xff
   );
   const feed = Uint8Array.of(0x1b, 0x64, 0x03); // ESC d 3 – posun papiera o 3 riadky
+  const chunks = [init, rasterHeader, raster, feed];
+  if (cut) chunks.push(Uint8Array.of(0x1d, 0x56, 0x42, 0x00)); // GS V 66 0 – čiastočný rez
 
-  return concatBytes([init, rasterHeader, raster, feed]);
+  return concatBytes(chunks);
 }

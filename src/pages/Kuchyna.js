@@ -1,10 +1,12 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { db } from "../firebase";
 import { ref, onValue, get, push, set, runTransaction, remove } from "firebase/database";
 import "./kiosk.css";
 import "./kuchyna.css";
 import RoleHeader from "./RoleHeader";
 import { useSession } from "../SessionProvider";
+import { hasPager, isQrOrder, orderHeadline, paymentLogFields } from "../lib/orderLabel";
+import { writeQrStav } from "../lib/qrStav";
 
 export default function Kuchyna() {
   const { sessionCode: session } = useSession();
@@ -21,36 +23,6 @@ export default function Kuchyna() {
     from: null,
     to: null,
   });
-
-  // ---- stránkovanie ----
-  const pageSize = 3;
-  const [page, setPage] = useState(0);
-
-  // Šípky: hore keď sme na začiatku stránky, dole keď sa scrolluje – nikdy
-  // nesedia pevne v strede, kde by prekrývali tlačidlá/checkboxy objednávok.
-  const [pagerDole, setPagerDole] = useState(false);
-  useEffect(() => {
-    function onScroll() {
-      setPagerDole(window.scrollY > 80);
-    }
-    onScroll();
-    window.addEventListener("scroll", onScroll, { passive: true });
-    return () => window.removeEventListener("scroll", onScroll);
-  }, []);
-
-  // Offset zhora sa meria podľa reálnej výšky sticky hlavičiek (RoleHeader + topbar),
-  // aby "hore" šípky neskončili schované pod nimi.
-  const [pagerTop, setPagerTop] = useState(8);
-  useEffect(() => {
-    function nastavOffset() {
-      const header = document.querySelector(".role-header");
-      const topbar = document.querySelector(".topbar");
-      setPagerTop((header?.offsetHeight || 0) + (topbar?.offsetHeight || 0) + 8);
-    }
-    nastavOffset();
-    window.addEventListener("resize", nastavOffset);
-    return () => window.removeEventListener("resize", nastavOffset);
-  }, []);
 
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 1000);
@@ -187,33 +159,7 @@ export default function Kuchyna() {
       });
   }, [objednavky]);
 
-  // stránky
-  const pageCount = Math.max(1, Math.ceil(waitingOrders.length / pageSize));
-  useEffect(() => {
-    setPage((p) => Math.min(Math.max(0, p), pageCount - 1));
-  }, [pageCount]);
-
-  const visibleOrders = useMemo(() => {
-    const start = page * pageSize;
-    return waitingOrders.slice(start, start + pageSize);
-  }, [waitingOrders, page]);
-
-  // Swipe medzi stránkami (funguje popri šípkach – myšou aj prstom).
-  const swipeStart = useRef(null);
-  function handleSwipeStart(e) {
-    swipeStart.current = { x: e.clientX, y: e.clientY };
-  }
-  function handleSwipeEnd(e) {
-    if (!swipeStart.current) return;
-    const dx = e.clientX - swipeStart.current.x;
-    const dy = e.clientY - swipeStart.current.y;
-    swipeStart.current = null;
-    if (Math.abs(dx) < 60 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
-    if (dx < 0) setPage((p) => Math.min(pageCount - 1, p + 1));
-    else setPage((p) => Math.max(0, p - 1));
-  }
-
-  // výpočet „Zostáva pripraviť“ (odpočítava zaškrtnuté z aktuálnej stránky)
+  // výpočet „Zostáva pripraviť“ (odpočítava zaškrtnuté zo všetkých čakajúcich)
   const toPrep = useMemo(() => {
     const sum = {};
     waitingOrders.forEach((o) => {
@@ -229,7 +175,7 @@ export default function Kuchyna() {
       });
     });
 
-    visibleOrders.forEach((o) => {
+    waitingOrders.forEach((o) => {
       const m = checked[o.id] || {};
       Object.entries(m).forEach(([key, v]) => {
         if (!v) return;
@@ -253,7 +199,7 @@ export default function Kuchyna() {
 
     const total = items.reduce((t, r) => t + r.ks, 0);
     return { items, total };
-  }, [waitingOrders, visibleOrders, checked]);
+  }, [waitingOrders, checked]);
 
   function totalItemsInOrder(order) {
     let total = Object.values(order?.polozky || {}).reduce((s, ks) => s + Number(ks || 0), 0);
@@ -317,15 +263,25 @@ export default function Kuchyna() {
       const newLog = push(logRef);
       await set(newLog, {
         objednavkaId: order.id,
-        vysielac: order.vysielac,
+        ...(hasPager(order) ? { vysielac: order.vysielac } : {}),
         ...(order.orderNumber != null ? { orderNumber: order.orderNumber } : {}),
+        ...paymentLogFields(order),
         polozky: order.polozky,
         ...(order.prilohy ? { prilohy: order.prilohy } : {}),
         suma: order.suma || 0,
         completedAt: Date.now(),
         createdAt: order.timestamp || null,
       });
-      await set(ref(db, `sessions/${session}/vysielace/${order.vysielac}`), "ready");
+      if (isQrOrder(order)) {
+        try {
+          await writeQrStav(session, order.id, "hotove", order.orderNumber);
+        } catch (err) {
+          console.error("Stav QR sa nepodarilo uložiť:", err);
+        }
+      }
+      if (hasPager(order)) {
+        await set(ref(db, `sessions/${session}/vysielace/${order.vysielac}`), "ready");
+      }
       await set(ref(db, `sessions/${session}/objednavky/${order.id}`), null);
       // vyčisti zdieľané checkboxy pre túto objednávku
       await remove(ref(db, `sessions/${session}/kuchynaChecks/${order.id}`));
@@ -392,7 +348,7 @@ export default function Kuchyna() {
               </table>
             </div>
             <div className="k-help" style={{ marginTop: 6 }}>
-              Počty sú zo všetkých čakajúcich objednávok; z aktuálnej stránky odpočítavame už odškrtnuté kusy.
+              Počty sú zo všetkých čakajúcich objednávok. Už odškrtnuté kusy sa odrátajú.
             </div>
           </div>
         )}
@@ -401,35 +357,8 @@ export default function Kuchyna() {
           <p className="muted">Žiadne objednávky zatiaľ.</p>
         ) : (
           <div className="orders-wrap">
-            {/* Pager šípky (pozície/zelene rieši CSS v kuchyna.css) */}
-            <button
-              className={`pager left${pagerDole ? " dole" : ""}`}
-              style={{ top: pagerDole ? undefined : pagerTop }}
-              onClick={() => setPage((p) => Math.max(0, p - 1))}
-              disabled={page === 0}
-              aria-label="Predošlé objednávky"
-              title="Predošlé objednávky"
-            >
-              ‹
-            </button>
-            <button
-              className={`pager right${pagerDole ? " dole" : ""}`}
-              style={{ top: pagerDole ? undefined : pagerTop }}
-              onClick={() => setPage((p) => Math.min(pageCount - 1, p + 1))}
-              disabled={page >= pageCount - 1}
-              aria-label="Ďalšie objednávky"
-              title="Ďalšie objednávky"
-            >
-              ›
-            </button>
-
-            <div
-              className="orders-grid"
-              key={page}
-              onPointerDown={handleSwipeStart}
-              onPointerUp={handleSwipeEnd}
-            >
-              {visibleOrders.map((o) => {
+            <div className="orders-grid">
+              {waitingOrders.map((o) => {
                 const elapsedMs = Math.max(0, now - (o.timestamp || now));
                 const complete = isOrderComplete(o);
                 return (
@@ -437,7 +366,7 @@ export default function Kuchyna() {
                     <div className="order-head">
                       <div>
                         <div style={{ fontSize: 28, fontWeight: 900, lineHeight: 1 }}>
-                          Pípač #{o.vysielac}
+                          {orderHeadline(o)}
                         </div>
                         <div style={{
                           fontSize: 17,
@@ -449,7 +378,7 @@ export default function Kuchyna() {
                           display: "inline-block",
                           marginTop: 4,
                         }}>
-                          Objednávka #{o.orderNumber ?? (waitingOrders.indexOf(o) + 1)}
+                          Objednávka #{o.orderNumber ?? "—"}
                         </div>
                       </div>
                       <span
@@ -509,10 +438,6 @@ export default function Kuchyna() {
                   </div>
                 );
               })}
-            </div>
-
-            <div className="pager-indicator">
-              Strana {page + 1} / {pageCount}
             </div>
           </div>
         )}

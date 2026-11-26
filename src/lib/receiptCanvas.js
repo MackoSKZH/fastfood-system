@@ -111,8 +111,8 @@ function drawKeyValue(ctx, label, value, y, width) {
 //          riadky: [{ nazov, cena, prilohy: [{ nazov, cena, count }] }],
 //          suma, zaplatene, vydaj }
 // Vráti canvas orezaný presne na výšku vytlačeného obsahu (bez bieleho prebytku dole).
-async function drawReceiptCanvas(order) {
-  const width = PRINT_WIDTH;
+async function drawReceiptCanvas(order, options = {}) {
+  const width = options.width || PRINT_WIDTH;
   const canvas = document.createElement("canvas");
   canvas.width = width;
   canvas.height = MAX_HEIGHT;
@@ -144,8 +144,16 @@ async function drawReceiptCanvas(order) {
     ctx.fillText(new Date(order.createdAt).toLocaleString("sk-SK"), width / 2, y);
     y += LINE_H_SMALL;
   }
-  ctx.fillText(`Objednávka #${order.orderNumber ?? "-"} - Pípač #${order.vysielac ?? "-"}`, width / 2, y);
-  y += LINE_H_SMALL + 8;
+  if (order.vysielac != null && order.vysielac !== "") {
+    ctx.fillText(`Objednávka #${order.orderNumber ?? "-"} - Pípač #${order.vysielac}`, width / 2, y);
+    y += LINE_H_SMALL + 8;
+  } else {
+    const numberText = `Objednávka #${order.orderNumber ?? "-"}`;
+    fitFontSize(ctx, numberText, width - PADDING_X * 2, 64, 36, "bold ");
+    ctx.textAlign = "center";
+    ctx.fillText(numberText, width / 2, y);
+    y += 78;
+  }
 
   drawDivider(ctx, y, width);
   y += 20;
@@ -239,8 +247,8 @@ async function drawReceiptCanvas(order) {
 }
 
 // order → canvas orezaný na výšku obsahu, pripravený na PNG export/tlač.
-export async function renderReceipt(order) {
-  return drawReceiptCanvas(order);
+export async function renderReceipt(order, options) {
+  return drawReceiptCanvas(order, options);
 }
 
 // Tichy download canvasu ako PNG (bez dialógu) – použije sa napr. na archiváciu bločku.

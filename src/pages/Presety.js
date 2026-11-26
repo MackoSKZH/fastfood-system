@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, Fragment } from "react";
 import { db } from "../firebase";
 import { ref, set, onValue, remove, update } from "firebase/database";
+import { translateSkToEn } from "../lib/translate";
 import { useNavigate } from "react-router-dom";
 import { DndContext, closestCenter, PointerSensor, useSensor, useSensors } from "@dnd-kit/core";
 import { SortableContext, verticalListSortingStrategy, useSortable, arrayMove } from "@dnd-kit/sortable";
@@ -51,6 +52,7 @@ export default function Presety() {
   const [expandedItem, setExpandedItem] = useState(null);
   const [novaPriloha, setNovaPriloha] = useState({ nazov: "", cena: "" });
   const [pickerOpenFor, setPickerOpenFor] = useState(null);
+  const [prekladam, setPrekladam] = useState(false);
 
   useEffect(() => {
     const off = onValue(ref(db, "presets"), (snap) => setPresety(snap.val() || {}));
@@ -73,11 +75,14 @@ export default function Presety() {
         nazov,
         cena: Number(v?.cena ?? 0),
         farba: (v?.farba != null) ? Number(v.farba) : null,
+        qr: v?.qr !== false,
+        en: typeof v?.en === "string" ? v.en : "",
         poradie: (v?.poradie != null) ? Number(v.poradie) : null,
         prilohy: Object.entries(v?.prilohy || {})
           .map(([pn, pv]) => ({
             nazov: pn,
             cena: Number(pv?.cena ?? 0),
+            en: typeof pv?.en === "string" ? pv.en : "",
             poradie: (pv?.poradie != null) ? Number(pv.poradie) : null,
           }))
           .sort((a, b) => {
@@ -170,6 +175,12 @@ export default function Presety() {
     if (!isFinite(parsed) || parsed < 0) return alert("Zadaj platnú cenu.");
     try {
       await set(ref(db, `presets/${vybranyPreset}/${nazov}/cena`), parsed);
+      try {
+        const [en] = await translateSkToEn([nazov]);
+        if (en) await set(ref(db, `presets/${vybranyPreset}/${nazov}/en`), en);
+      } catch {
+        alert("Položka je uložená. Anglický názov doplň ručne.");
+      }
       setNovaPolozka({ nazov: "", cena: "" });
     } catch (err) {
       alert("Položku sa nepodarilo pridať.");
@@ -188,14 +199,15 @@ export default function Presety() {
     }
   }
 
-  function startEdit(nazov, cena) {
-    setEditRadok({ povodnyNazov: nazov, nazov, cena: String(cena) });
+  function startEdit(nazov, cena, en) {
+    setEditRadok({ povodnyNazov: nazov, nazov, cena: String(cena), en: en || "" });
   }
 
   async function ulozitEdit() {
     if (!editRadok) return;
     const povodnyNazov = editRadok.povodnyNazov;
     const novyNazov = trimText(editRadok.nazov);
+    const en = trimText(editRadok.en || "");
     const parsed = parseFloat(String(editRadok.cena).replace(",", "."));
     if (!novyNazov) return alert("Zadaj názov položky.");
     if (hasForbidden(novyNazov)) return alert("Názov položky obsahuje zakázané znaky: . # $ [ ] /");
@@ -205,18 +217,34 @@ export default function Presety() {
         if (presety[vybranyPreset]?.[novyNazov]) {
           return alert(`Položka '${novyNazov}' už v tomto presete existuje.`);
         }
-        const existujuce = presety[vybranyPreset]?.[povodnyNazov] || {};
+        const existujuce = { ...(presety[vybranyPreset]?.[povodnyNazov] || {}) };
+        existujuce.cena = parsed;
+        if (en) existujuce.en = en;
+        else delete existujuce.en;
         const updates = {};
-        updates[`presets/${vybranyPreset}/${novyNazov}`] = { ...existujuce, cena: parsed };
+        updates[`presets/${vybranyPreset}/${novyNazov}`] = existujuce;
         updates[`presets/${vybranyPreset}/${povodnyNazov}`] = null;
         await update(ref(db), updates);
         if (expandedItem === povodnyNazov) setExpandedItem(novyNazov);
       } else {
-        await set(ref(db, `presets/${vybranyPreset}/${povodnyNazov}/cena`), parsed);
+        const updates = {};
+        updates[`presets/${vybranyPreset}/${povodnyNazov}/cena`] = parsed;
+        updates[`presets/${vybranyPreset}/${povodnyNazov}/en`] = en || null;
+        await update(ref(db), updates);
       }
       setEditRadok(null);
     } catch (err) {
       alert("Zmenu sa nepodarilo uložiť.");
+    }
+  }
+
+  async function ulozitQr(itemNazov, on) {
+    try {
+      const path = `presets/${vybranyPreset}/${itemNazov}/qr`;
+      if (on) await remove(ref(db, path));
+      else await set(ref(db, path), false);
+    } catch (err) {
+      alert("QR sa nepodarilo uložiť.");
     }
   }
 
@@ -240,6 +268,12 @@ export default function Presety() {
     if (!isFinite(parsed) || parsed < 0) return alert("Zadaj platnú cenu prílohy.");
     try {
       await set(ref(db, `presets/${vybranyPreset}/${itemNazov}/prilohy/${nazov}`), { cena: parsed });
+      try {
+        const [en] = await translateSkToEn([nazov]);
+        if (en) await set(ref(db, `presets/${vybranyPreset}/${itemNazov}/prilohy/${nazov}/en`), en);
+      } catch {
+        alert("Príloha je uložená. Anglický názov doplň ručne.");
+      }
       setNovaPriloha({ nazov: "", cena: "" });
     } catch (err) {
       alert("Prílohu sa nepodarilo pridať.");
@@ -255,9 +289,89 @@ export default function Presety() {
     }
   }
 
+  async function ulozitRucnyPreklad(path, text) {
+    const en = trimText(text || "");
+    try {
+      if (en) await set(ref(db, path), en);
+      else await remove(ref(db, path));
+    } catch {
+      alert("Anglický názov sa nepodarilo uložiť.");
+    }
+  }
+
+  async function prelozitText(path, zdroj) {
+    setPrekladam(true);
+    try {
+      const [en] = await translateSkToEn([zdroj]);
+      if (!en) throw new Error("empty");
+      await set(ref(db, path), en);
+      return en;
+    } catch {
+      alert("Preklad sa nepodaril. Anglický názov doplň ručne.");
+      return "";
+    } finally {
+      setPrekladam(false);
+    }
+  }
+
+  async function prelozitPolozku(nazov) {
+    const en = await prelozitText(`presets/${vybranyPreset}/${nazov}/en`, nazov);
+    if (en) {
+      setEditRadok((s) => (s?.povodnyNazov === nazov ? { ...s, en } : s));
+    }
+  }
+
+  async function prelozitChybajuce() {
+    const jobs = [];
+    polozky.forEach((item) => {
+      if (!trimText(item.en || "")) {
+        jobs.push({ path: `presets/${vybranyPreset}/${item.nazov}/en`, text: item.nazov });
+      }
+      item.prilohy.forEach((side) => {
+        if (!trimText(side.en || "")) {
+          jobs.push({
+            path: `presets/${vybranyPreset}/${item.nazov}/prilohy/${side.nazov}/en`,
+            text: side.nazov,
+          });
+        }
+      });
+    });
+    if (!jobs.length) return;
+    setPrekladam(true);
+    try {
+      const translated = await translateSkToEn(jobs.map((job) => job.text));
+      const updates = {};
+      jobs.forEach((job, index) => {
+        if (translated[index]) updates[job.path] = translated[index];
+      });
+      if (Object.keys(updates).length) await update(ref(db), updates);
+    } catch {
+      alert("Preklad sa nepodaril. Anglický názov doplň ručne.");
+    } finally {
+      setPrekladam(false);
+    }
+  }
+
   function toggleExpand(nazov) {
     setExpandedItem((prev) => (prev === nazov ? null : nazov));
     setNovaPriloha({ nazov: "", cena: "" });
+  }
+
+  function QrSwitch({ nazov, on }) {
+    return (
+      <button
+        type="button"
+        className={`k-qr-switch${on ? " on" : ""}`}
+        role="switch"
+        aria-checked={on}
+        aria-label={on ? `${nazov} je na QR kóde` : `${nazov} nie je na QR kóde`}
+        title={on ? "Zákazník toto jedlo po naskenovaní uvidí" : "Na QR sa toto jedlo nezobrazí"}
+        onClick={() => ulozitQr(nazov, !on)}
+      >
+        <span className="k-qr-switch-knob" aria-hidden="true" />
+        QR
+      </button>
+    );
   }
 
   function ColorPickerToggle({ nazov, current }) {
@@ -320,13 +434,38 @@ export default function Presety() {
                 {item.prilohy.map((p) => (
                   <SortableRow id={p.nazov} as="div" key={p.nazov}>
                     {({ attributes, listeners }) => (
-                      <div className="k-row" style={{ justifyContent: "space-between", padding: "3px 0" }}>
-                        <div className="k-row" style={{ gap: 6 }}>
+                      <div className="k-row" style={{ justifyContent: "space-between", padding: "3px 0", alignItems: "center" }}>
+                        <div className="k-row" style={{ gap: 6, flex: 1, minWidth: 0 }}>
                           <DragHandle attributes={attributes} listeners={listeners} />
-                          <span>{p.nazov}</span>
+                          <div style={{ minWidth: 0 }}>
+                            <div>{p.nazov}</div>
+                            <input
+                              key={`${p.nazov}:${p.en || ""}`}
+                              className="k-input"
+                              defaultValue={p.en || ""}
+                              placeholder="English"
+                              aria-label={`Anglicky ${p.nazov}`}
+                              onBlur={(e) => ulozitRucnyPreklad(
+                                `presets/${vybranyPreset}/${item.nazov}/prilohy/${p.nazov}/en`,
+                                e.target.value
+                              )}
+                              style={{ marginTop: 4, width: "100%", minWidth: 140 }}
+                            />
+                          </div>
                         </div>
                         <div className="k-row" style={{ gap: 8 }}>
                           <span className="k-help">€{p.cena.toFixed(2)}</span>
+                          <button
+                            className="k-btn"
+                            style={{ padding: "3px 8px" }}
+                            disabled={prekladam}
+                            onClick={() => prelozitText(
+                              `presets/${vybranyPreset}/${item.nazov}/prilohy/${p.nazov}/en`,
+                              p.nazov
+                            )}
+                          >
+                            Preložiť
+                          </button>
                           <button className="k-btn" style={{ padding: "3px 8px" }} onClick={() => vymazPrilohu(item.nazov, p.nazov)}>🗑️</button>
                         </div>
                       </div>
@@ -432,6 +571,9 @@ export default function Presety() {
                 <h2 className="k-title" style={{ margin: 0 }}>
                   Preset: <code>{vybranyPreset}</code>
                 </h2>
+                <button className="k-btn" disabled={prekladam || polozky.length === 0} onClick={prelozitChybajuce}>
+                  {prekladam ? "Prekladám…" : "Preložiť chýbajúce"}
+                </button>
               </div>
 
               <div className="k-row" style={{ marginTop: 8, flexWrap: "wrap" }}>
@@ -456,6 +598,9 @@ export default function Presety() {
                 />
                 <button className="k-btn primary" onClick={pridatPolozku}>➕ Pridať</button>
               </div>
+              <p className="k-help" style={{ marginTop: 8 }}>
+                Jedlo je na QR kóde, kým prepínač nevypneš.
+              </p>
 
               {polozky.length === 0 ? (
                 <p className="k-help" style={{ marginTop: 12 }}>Tento preset je prázdny.</p>
@@ -473,6 +618,7 @@ export default function Presety() {
                             <th>Položka</th>
                             <th style={{ width: 160 }}>Cena</th>
                             <th style={{ width: 180 }}>Farba</th>
+                            <th style={{ width: 90 }}>QR</th>
                             <th style={{ width: 280 }}></th>
                           </tr>
                         </thead>
@@ -491,16 +637,30 @@ export default function Presety() {
                                   </td>
                                   <td>
                                     {editing ? (
-                                      <input
-                                        className="k-input"
-                                        value={editRadok.nazov}
-                                        onChange={(e) => setEditRadok((s) => ({ ...s, nazov: e.target.value }))}
-                                        onKeyDown={(e) => e.key === "Enter" && ulozitEdit()}
-                                        style={{ width: 160 }}
-                                        autoFocus
-                                      />
+                                      <div>
+                                        <input
+                                          className="k-input"
+                                          value={editRadok.nazov}
+                                          onChange={(e) => setEditRadok((s) => ({ ...s, nazov: e.target.value }))}
+                                          onKeyDown={(e) => e.key === "Enter" && ulozitEdit()}
+                                          style={{ width: 180 }}
+                                          autoFocus
+                                        />
+                                        <input
+                                          className="k-input"
+                                          value={editRadok.en}
+                                          placeholder="English"
+                                          aria-label="Anglický názov"
+                                          onChange={(e) => setEditRadok((s) => ({ ...s, en: e.target.value }))}
+                                          onKeyDown={(e) => e.key === "Enter" && ulozitEdit()}
+                                          style={{ width: 180, marginTop: 6 }}
+                                        />
+                                      </div>
                                     ) : (
-                                      nazov
+                                      <div>
+                                        <div>{nazov}</div>
+                                        <div className="k-help">{item.en || "Bez anglického názvu"}</div>
+                                      </div>
                                     )}
                                   </td>
                                   <td>
@@ -523,6 +683,9 @@ export default function Presety() {
                                     <ColorPickerToggle nazov={nazov} current={item.farba} />
                                   </td>
                                   <td>
+                                    <QrSwitch nazov={nazov} on={item.qr} />
+                                  </td>
+                                  <td>
                                     <div className="k-row">
                                       {editing ? (
                                         <>
@@ -531,7 +694,8 @@ export default function Presety() {
                                         </>
                                       ) : (
                                         <>
-                                          <button className="k-btn" onClick={() => startEdit(nazov, cena)}>✏️ Upraviť</button>
+                                          <button className="k-btn" onClick={() => startEdit(nazov, cena, item.en)}>✏️ Upraviť</button>
+                                          <button className="k-btn" disabled={prekladam} onClick={() => prelozitPolozku(nazov)}>Preložiť</button>
                                           <button
                                             className={`k-btn${expanded ? " accent" : ""}`}
                                             onClick={() => toggleExpand(nazov)}
@@ -548,7 +712,7 @@ export default function Presety() {
                                 </SortableRow>
                                 {expanded && (
                                   <tr>
-                                    <td colSpan={4} style={{ background: "#fafafa", padding: "8px 16px" }}>
+                                    <td colSpan={6} style={{ background: "#fafafa", padding: "8px 16px" }}>
                                       {renderPrilohyPanel(item)}
                                     </td>
                                   </tr>
@@ -594,6 +758,15 @@ export default function Presety() {
                                 />
                                 <input
                                   className="k-input"
+                                  value={editRadok.en}
+                                  placeholder="English"
+                                  aria-label="Anglický názov"
+                                  onChange={(e) => setEditRadok((s) => ({ ...s, en: e.target.value }))}
+                                  onKeyDown={(e) => e.key === "Enter" && ulozitEdit()}
+                                  style={{ flex: 1, minWidth: 140 }}
+                                />
+                                <input
+                                  className="k-input"
                                   type="number"
                                   value={editRadok.cena}
                                   onChange={(e) => setEditRadok((s) => ({ ...s, cena: e.target.value }))}
@@ -604,9 +777,13 @@ export default function Presety() {
                                 />
                               </div>
                             )}
+                            {!editing && (
+                              <div className="k-help" style={{ marginTop: 6 }}>{item.en || "Bez anglického názvu"}</div>
+                            )}
 
-                            <div style={{ marginTop: 8 }}>
+                            <div className="k-row" style={{ marginTop: 8, alignItems: "center" }}>
                               <ColorPickerToggle nazov={nazov} current={item.farba} />
+                              <QrSwitch nazov={nazov} on={item.qr} />
                             </div>
                             <div className="k-row" style={{ marginTop: 10, flexWrap: "wrap" }}>
                               {editing ? (
@@ -616,7 +793,8 @@ export default function Presety() {
                                 </>
                               ) : (
                                 <>
-                                  <button className="k-btn" onClick={() => startEdit(nazov, cena)}>Upraviť</button>
+                                  <button className="k-btn" onClick={() => startEdit(nazov, cena, item.en)}>Upraviť</button>
+                                  <button className="k-btn" disabled={prekladam} onClick={() => prelozitPolozku(nazov)}>Preložiť</button>
                                   <button
                                     className={`k-btn${expanded ? " accent" : ""}`}
                                     onClick={() => toggleExpand(nazov)}

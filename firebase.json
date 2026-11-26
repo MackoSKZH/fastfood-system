@@ -1,4 +1,11 @@
 {
+  "functions": [
+    {
+      "source": "functions",
+      "codebase": "default",
+      "ignore": ["node_modules", ".git", ".env", ".env.*"]
+    }
+  ],
   "hosting": {
     "public": "build",
     "ignore": ["**/.*", "**/node_modules/**"],

@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { isTicketOrder, orderHeadline } from "../lib/orderLabel";
 
 // session/logZaznamy/tlacim/onPrint prichádzajú z Kasa.js – logZaznamy sú tam už
 // aj tak načítané (sessions/{session}/log), netreba duplicitný Firebase listener.
@@ -49,7 +50,10 @@ export default function HistoryModal({ session, logZaznamy, tlacim, onPrint, onC
                     <td>
                       <div style={{ cursor: "pointer" }} onClick={() => toggleRozbalene(rec.id)}>
                         <span style={{ fontSize: "0.82em", color: "#6b7280" }}>
-                          Objednávka #{rec.orderNumber ?? "—"} · Pípač #{rec.vysielac ?? "—"} {otvorene ? "▲" : "▼"}
+                          {isTicketOrder(rec)
+                            ? orderHeadline(rec)
+                            : `Objednávka #${rec.orderNumber ?? "—"} · Pípač #${rec.vysielac ?? "—"}`}{" "}
+                          {otvorene ? "▲" : "▼"}
                         </span>
                       </div>
                       {otvorene && (

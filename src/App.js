@@ -5,6 +5,7 @@ import Obsluha from "./pages/Obsluha";
 import Kasa from "./pages/Kasa";
 import Kuchyna from "./pages/Kuchyna";
 import Presety from "./pages/Presety";
+import QrObjednavka from "./pages/QrObjednavka";
 
 import { ToastProvider } from "./ui/toast";
 
@@ -68,6 +69,8 @@ function App() {
               </SessionGate>
             }
           />
+          <Route path="/objednat/:sessionCode" element={<QrObjednavka />} />
+          <Route path="/kiosk/:sessionCode" element={<QrObjednavka variant="kiosk" />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </SessionProvider>

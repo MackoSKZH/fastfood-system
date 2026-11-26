@@ -7,6 +7,9 @@ import RoleHeader from "./RoleHeader";
 import { useSession } from "../SessionProvider";
 import { useToast } from "../ui/toast";
 import { getClientId } from "../lib/clientId";
+import { hasPager, isQrOrder, isTicketOrder, orderHeadline, pickupLabel, QrVydaj } from "../lib/orderLabel";
+import { releaseOrderNumber } from "../lib/orderNumber";
+import { writeQrStav } from "../lib/qrStav";
 
 export default function Obsluha() {
   const { sessionCode: session } = useSession();
@@ -169,12 +172,24 @@ export default function Obsluha() {
     return `${h}h`;
   }
 
-  async function oznacitPrevzate(id, vys = null) {
+  async function oznacitPrevzate(id, vys = null, orderNumber = null, qrOrderId = null) {
     if (!session) return;
     await set(ref(db, `sessions/${session}/prevzate/${id}`), true);
     await set(ref(db, `sessions/${session}/riesene/${id}`), null);
     if (vys != null) {
       await set(ref(db, `sessions/${session}/vysielace/${vys}`), null);
+    }
+    if (qrOrderId) {
+      try {
+        await writeQrStav(session, qrOrderId, "prevzate", orderNumber);
+      } catch (err) {
+        console.error("Stav QR sa nepodarilo uložiť:", err);
+      }
+    }
+    try {
+      await releaseOrderNumber(session, orderNumber);
+    } catch (err) {
+      console.error("Číslo objednávky sa nepodarilo uvoľniť:", err);
     }
   }
 
@@ -272,9 +287,12 @@ export default function Obsluha() {
                             title={rieseneTitle(rec.id)}
                             onClick={() => toggleRiesene(rec.id)}
                           />
-                          <span style={{ fontWeight: 900, fontSize: "1.15em" }}>Pípač #{rec.vysielac ?? "—"}</span>
+                          <span style={{ fontWeight: 900, fontSize: "1.15em" }}>{orderHeadline(rec)}</span>
                         </div>
-                        <div style={{ fontSize: "0.82em", color: "#6b7280", marginBottom: 2 }}>Objednávka #{rec.orderNumber ?? "—"}</div>
+                        {!isTicketOrder(rec) && (
+                          <div style={{ fontSize: "0.82em", color: "#6b7280", marginBottom: 2 }}>Objednávka #{rec.orderNumber ?? "—"}</div>
+                        )}
+                        <QrVydaj order={rec} />
                         {instances.length === 0 && "—"}
                         {instances.map((item, i) => (
                           <div key={i}>
@@ -287,7 +305,7 @@ export default function Obsluha() {
                           </div>
                         ))}
                       </td>
-                      <td>{rec.vysielac ?? "—"}</td>
+                      <td>{pickupLabel(rec)}</td>
                       <td>
                         {typeof rec.suma === "number"
                           ? rec.suma.toFixed(2) + " €"
@@ -296,7 +314,7 @@ export default function Obsluha() {
                       <td>
                         <button
                           className="k-btn k-btn--success"
-                          onClick={() => oznacitPrevzate(rec.id, rec.vysielac ?? null)}
+                          onClick={() => oznacitPrevzate(rec.id, hasPager(rec) ? rec.vysielac : null, rec.orderNumber, isQrOrder(rec) ? rec.objednavkaId : null)}
                         >
                           Prevzaté
                         </button>
@@ -324,9 +342,12 @@ export default function Obsluha() {
                           title={rieseneTitle(rec.id)}
                           onClick={() => toggleRiesene(rec.id)}
                         />
-                        Pípač #{rec.vysielac ?? "—"}
+                        {orderHeadline(rec)}
                       </div>
-                      <div style={{ fontSize: "0.8em", color: "#6b7280", marginTop: 1 }}>Objednávka #{rec.orderNumber ?? "—"}</div>
+                      {!isTicketOrder(rec) && (
+                        <div style={{ fontSize: "0.8em", color: "#6b7280", marginTop: 1 }}>Objednávka #{rec.orderNumber ?? "—"}</div>
+                      )}
+                      <QrVydaj order={rec} />
                     </div>
                     <div
                       className="o-time"
@@ -362,7 +383,7 @@ export default function Obsluha() {
 
                   <button
                     className="o-btn-primary"
-                    onClick={() => oznacitPrevzate(rec.id, rec.vysielac ?? null)}
+                    onClick={() => oznacitPrevzate(rec.id, hasPager(rec) ? rec.vysielac : null, rec.orderNumber, isQrOrder(rec) ? rec.objednavkaId : null)}
                   >
                     Prevzaté
                   </button>

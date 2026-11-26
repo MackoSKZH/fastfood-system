@@ -20,6 +20,10 @@ import { renderReceipt, saveCanvasPngSilently } from "../lib/receiptCanvas";
 import { printCanvasViaRawBT } from "../lib/rawbtPrint";
 import { isWebSerialSupported, printCanvasViaWebSerial } from "../lib/webSerialPrint";
 import { getClientId } from "../lib/clientId";
+import { hasPager, isQrOrder, isTicketOrder, orderHeadline, QrVydaj } from "../lib/orderLabel";
+import { allocateOrderNumber, OrderNumbersFullError, releaseOrderNumber } from "../lib/orderNumber";
+import { writeQrStav } from "../lib/qrStav";
+import QrLinkModal from "../components/QrLinkModal";
 
 const VIP_VYSIELACE = ["01", "02", "03", "04"];
 
@@ -70,6 +74,7 @@ export default function Kasa() {
   const [cartItems, setCartItems] = useState([]);
   const [showInfo, setShowInfo] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
+  const [showQr, setShowQr] = useState(false);
   const [logZaznamy, setLogZaznamy] = useState([]);
   const [prevzateMap, setPrevzateMap] = useState({});
   const [rieseneMap, setRieseneMap] = useState({});
@@ -155,6 +160,7 @@ export default function Kasa() {
         nazov,
         cena: Number((v && v.cena) ?? 0),
         farba: (v?.farba != null) ? Number(v.farba) : null,
+        qr: v?.qr !== false,
         poradie: (v?.poradie != null) ? Number(v.poradie) : null,
         prilohy: Object.entries(v?.prilohy || {})
           .map(([pn, pv]) => ({
@@ -238,12 +244,24 @@ export default function Kasa() {
     return `${Math.floor(m / 60)}h`;
   }
 
-  async function oznacitPrevzate(id, vys = null) {
+  async function oznacitPrevzate(id, vys = null, orderNumber = null, qrOrderId = null) {
     if (!session) return;
     await set(ref(db, `sessions/${session}/prevzate/${id}`), true);
     await set(ref(db, `sessions/${session}/riesene/${id}`), null);
     if (vys != null) {
       await set(ref(db, `sessions/${session}/vysielace/${vys}`), null);
+    }
+    if (qrOrderId) {
+      try {
+        await writeQrStav(session, qrOrderId, "prevzate", orderNumber);
+      } catch (err) {
+        console.error("Stav QR sa nepodarilo uložiť:", err);
+      }
+    }
+    try {
+      await releaseOrderNumber(session, orderNumber);
+    } catch (err) {
+      console.error("Číslo objednávky sa nepodarilo uvoľniť:", err);
     }
   }
 
@@ -405,10 +423,14 @@ export default function Kasa() {
   }
 
   async function potvrditObjednavku() {
+    let lockRef = null;
+    let orderNumber = null;
+    let orderSaved = false;
+    let numberStaysBusy = false;
     try {
       if (!session || !zvolenyVysielac || cartItems.length === 0) return;
 
-      const lockRef = ref(db, `sessions/${session}/vysielace/${zvolenyVysielac}`);
+      lockRef = ref(db, `sessions/${session}/vysielace/${zvolenyVysielac}`);
       const res = await runTransaction(
         lockRef,
         (current) => {
@@ -448,13 +470,8 @@ export default function Kasa() {
       const isExpress = VIP_VYSIELACE.includes(String(zvolenyVysielac));
       const now = Date.now();
 
-      // Atomicky získaj ďalšie číslo objednávky (1–100, cyklicky)
-      const counterRef = ref(db, `sessions/${session}/orderCounter`);
-      const counterRes = await runTransaction(counterRef, (current) => {
-        if (current === null || current >= 100) return 1;
-        return current + 1;
-      });
-      const orderNumber = counterRes.snapshot.val();
+      orderNumber = await allocateOrderNumber(session);
+      const issuedNumber = orderNumber;
 
       if (isExpress) {
         // Expresná objednávka – vydá sa rovno na kase, nejde do kuchyne ani do obsluhy
@@ -468,7 +485,12 @@ export default function Kasa() {
           completedAt: now,
           createdAt: now,
         });
+        orderSaved = true;
         await set(ref(db, `sessions/${session}/prevzate/${newLog.key}`), true);
+        try { await releaseOrderNumber(session, issuedNumber); } catch (err) {
+          console.error("Číslo objednávky sa nepodarilo uvoľniť:", err);
+        }
+        orderNumber = null;
         try { await onDisconnect(lockRef).cancel(); } catch {}
         await set(lockRef, null);
         mamAktivnyLock.current = false;
@@ -483,6 +505,8 @@ export default function Kasa() {
           status: "waiting",
           timestamp: now,
         });
+        orderSaved = true;
+        numberStaysBusy = true;
         try { await onDisconnect(lockRef).cancel(); } catch {}
         await set(lockRef, true);
         mamAktivnyLock.current = true;
@@ -499,7 +523,7 @@ export default function Kasa() {
       });
       setPoslednyBlok({
         nazovPodniku: preset || session,
-        orderNumber,
+        orderNumber: issuedNumber,
         vysielac: zvolenyVysielac,
         riadky: riadkyBloku,
         suma,
@@ -514,6 +538,17 @@ export default function Kasa() {
       setZaplatene(0);
     } catch (err) {
       console.error("Chyba pri potvrdení objednávky:", err);
+      if (orderNumber != null && !orderSaved) {
+        try { await releaseOrderNumber(session, orderNumber); } catch {}
+      }
+      if (lockRef && mamAktivnyLock.current && !numberStaysBusy) {
+        try { await onDisconnect(lockRef).cancel(); } catch {}
+        try { await set(lockRef, null); } catch {}
+        mamAktivnyLock.current = false;
+      }
+      if (err instanceof OrderNumbersFullError) {
+        alert("Všetkých 100 čísel je ešte v kuchyni alebo na výdaji.");
+      }
     }
   }
 
@@ -546,6 +581,7 @@ export default function Kasa() {
             <div className="k-row">
               <button className="btn" onClick={() => setShowInfo(true)}>Info</button>
               <button className="k-btn" onClick={() => setShowHistory(true)}>História</button>
+              <button className="k-btn" onClick={() => setShowQr(true)}>QR objednávka</button>
               <button className="k-btn" onClick={goToPresety}>Presety</button>
               {vsetkyPresety.length ? (
                 <select
@@ -566,6 +602,7 @@ export default function Kasa() {
           </div>
         </div>
         {showInfo && <InfoModal session={session} onClose={() => setShowInfo(false)} />}
+        {showQr && <QrLinkModal session={session} onClose={() => setShowQr(false)} />}
         {showHistory && (
           <HistoryModal
             session={session}
@@ -586,10 +623,11 @@ export default function Kasa() {
                   const col = itemColorFn(p.farba);
                   return (
                     <div
-                      className={`k-card${count > 0 ? " in-cart" : ""}`}
+                      className={`k-card${count > 0 ? " in-cart" : ""}${p.qr ? " has-qr" : ""}`}
                       key={p.nazov}
                       style={col ? { '--ic-bg': col.bg, '--ic-border': col.border, '--ic-btn': col.btn } : undefined}
                     >
+                      {p.qr && <span className="k-qr-mark" title="Aj na QR kóde">QR</span>}
                       <div className="name">{p.nazov}</div>
                       <div className="price">€{p.cena.toFixed(2)}</div>
                       <div className="actions">
@@ -825,16 +863,19 @@ export default function Kasa() {
                                   title={rieseneTitle(rec.id)}
                                   onClick={() => toggleRiesene(rec.id)}
                                 />
-                                <span style={{ fontWeight: 900, fontSize: "1.15em" }}>Pípač #{rec.vysielac ?? "—"}</span>
+                                <span style={{ fontWeight: 900, fontSize: "1.15em" }}>{orderHeadline(rec)}</span>
                               </div>
-                              <div style={{ fontSize: "0.82em", color: "#6b7280" }}>Objednávka #{rec.orderNumber ?? "—"}</div>
+                              {!isTicketOrder(rec) && (
+                                <div style={{ fontSize: "0.82em", color: "#6b7280" }}>Objednávka #{rec.orderNumber ?? "—"}</div>
+                              )}
+                              <QrVydaj order={rec} />
                               <div>{items || "—"}{prilohy && <span className="k-help"> · ↳ {prilohy}</span>}</div>
                             </td>
                             <td>{typeof rec.suma === "number" ? rec.suma.toFixed(2) + " €" : rec.suma || "—"}</td>
                             <td>
                               <button
                                 className="k-btn k-btn--success"
-                                onClick={() => oznacitPrevzate(rec.id, rec.vysielac ?? null)}
+                                onClick={() => oznacitPrevzate(rec.id, hasPager(rec) ? rec.vysielac : null, rec.orderNumber, isQrOrder(rec) ? rec.objednavkaId : null)}
                               >
                                 Odovzdať
                               </button>
@@ -864,9 +905,12 @@ export default function Kasa() {
                                 title={rieseneTitle(rec.id)}
                                 onClick={() => toggleRiesene(rec.id)}
                               />
-                              Pípač #{rec.vysielac ?? "—"}
+                              {orderHeadline(rec)}
                             </div>
-                            <div style={{ fontSize: "0.8em", color: "#6b7280", marginTop: 1 }}>Objednávka #{rec.orderNumber ?? "—"}</div>
+                            {!isTicketOrder(rec) && (
+                              <div style={{ fontSize: "0.8em", color: "#6b7280", marginTop: 1 }}>Objednávka #{rec.orderNumber ?? "—"}</div>
+                            )}
+                            <QrVydaj order={rec} />
                           </div>
                           <div className="o-time" title={new Date(rec.completedAt || rec.createdAt || Date.now()).toLocaleString()}>
                             {timeAgo(rec.completedAt || rec.createdAt)}
@@ -897,7 +941,7 @@ export default function Kasa() {
                         </div>
                         <button
                           className="o-btn-primary"
-                          onClick={() => oznacitPrevzate(rec.id, rec.vysielac ?? null)}
+                          onClick={() => oznacitPrevzate(rec.id, hasPager(rec) ? rec.vysielac : null, rec.orderNumber, isQrOrder(rec) ? rec.objednavkaId : null)}
                         >
                           Odovzdať
                         </button>
