@@ -112,6 +112,26 @@
   margin: 12px 0 8px;
 }
 .qr-lead { text-align: center; font-size: 18px; margin: 0 0 16px; }
+.qr-ready {
+  background: var(--k-success, #16A34A);
+  color: #fff;
+  border-radius: 16px;
+  padding: 18px 16px;
+  text-align: center;
+  margin: 0 0 16px;
+}
+.qr-ready h1 {
+  margin: 0 0 8px;
+  color: #fff;
+  font-size: clamp(28px, 7vw, 40px);
+  line-height: 1.1;
+}
+.qr-ready p {
+  margin: 0;
+  color: #fff;
+  font-size: 18px;
+  font-weight: 700;
+}
 .qr-page.is-hotove .qr-kicker,
 .qr-page.is-hotove .qr-number { color: #047857; }
 .qr-page.is-prevzate .qr-number { color: #6b7280; }

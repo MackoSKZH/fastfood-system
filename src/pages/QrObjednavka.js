@@ -9,6 +9,7 @@ import { renderReceipt } from "../lib/receiptCanvas";
 import { printCanvasViaRawBT } from "../lib/rawbtPrint";
 import { isWebSerialSupported, prepareWebSerialPort, printCanvasViaWebSerial, requestWebSerialPort } from "../lib/webSerialPrint";
 import { customerCopy, foodLabel } from "../lib/qrCopy";
+import { playChime, unlockChime } from "../lib/chime";
 import { ITEM_COLORS } from "./Kasa";
 import "./kiosk.css";
 import "./qr.css";
@@ -171,6 +172,10 @@ export default function QrObjednavka({ variant = "qr" }) {
   const [kioskLocked, setKioskLocked] = useState(false);
   const sendingRef = useRef(false);
   const printedFor = useRef(null);
+  const chimedFor = useRef("");
+  const qrStavRef = useRef("kuchyna");
+  const receiptRef = useRef(null);
+  const tryReadyChimeRef = useRef(() => {});
 
   if (sessionSeen !== sessionCode) {
     const nextReceipt = isKiosk ? null : readReceipt(sessionCode);
@@ -194,6 +199,29 @@ export default function QrObjednavka({ variant = "qr" }) {
     const id = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(id);
   }, []);
+
+  qrStavRef.current = qrStav;
+  receiptRef.current = receipt;
+  tryReadyChimeRef.current = () => {
+    if (isKiosk || qrStavRef.current !== "hotove") return;
+    const token = receiptRef.current?.orderId || String(receiptRef.current?.orderNumber || "");
+    if (!token || chimedFor.current === token) return;
+    if (playChime()) chimedFor.current = token;
+  };
+
+  useEffect(() => {
+    tryReadyChimeRef.current();
+  }, [isKiosk, qrStav, receipt?.orderId, receipt?.orderNumber]);
+
+  useEffect(() => {
+    if (isKiosk) return undefined;
+    function onPointer() {
+      unlockChime();
+      tryReadyChimeRef.current();
+    }
+    document.addEventListener("pointerdown", onPointer);
+    return () => document.removeEventListener("pointerdown", onPointer);
+  }, [isKiosk]);
 
   useEffect(() => {
     if (isKiosk || !sessionCode || !receipt?.orderId) {
@@ -469,6 +497,7 @@ export default function QrObjednavka({ variant = "qr" }) {
   }
 
   async function odoslat() {
+    if (!isKiosk) unlockChime();
     if (sendingRef.current) return;
     const reason = payBlockReason();
     if (reason || cooldownLeft > 0) {
@@ -677,8 +706,9 @@ export default function QrObjednavka({ variant = "qr" }) {
       : qrStav === "hotove"
         ? {
             kicker: copy.ready,
-            title: copy.comeGet,
-            lead: copy.showThis,
+            title: copy.readyTitle,
+            lead: copy.readyLead,
+            box: true,
           }
         : qrStav === "prevzate"
           ? { kicker: copy.picked, title: copy.enjoy, lead: "" }
@@ -692,10 +722,15 @@ export default function QrObjednavka({ variant = "qr" }) {
         <header className="qr-top">
           {kioskStaffBar()}
           <div className="qr-kicker">{statusCopy.kicker}</div>
-          <h1>{statusCopy.title}</h1>
+          {!statusCopy.box && <h1>{statusCopy.title}</h1>}
         </header>
         <div className="qr-number" aria-live="polite">QR #{receipt.orderNumber}</div>
-        {statusCopy.lead ? <p className="qr-lead">{statusCopy.lead}</p> : null}
+        {statusCopy.box ? (
+          <div className="qr-ready" role="status">
+            <h1>{statusCopy.title}</h1>
+            <p>{statusCopy.lead}</p>
+          </div>
+        ) : statusCopy.lead ? <p className="qr-lead">{statusCopy.lead}</p> : null}
         <section className="k-panel qr-done">
           {(receipt.lines || []).map((line) => (
             <div key={line.nazov}>

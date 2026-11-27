@@ -24,6 +24,7 @@ import { getClientId } from "../lib/clientId";
 import { hasPager, isQrOrder, isTicketOrder, orderHeadline, QrVydaj } from "../lib/orderLabel";
 import { allocateOrderNumber, OrderNumbersFullError, releaseOrderNumber } from "../lib/orderNumber";
 import { writeQrStav } from "../lib/qrStav";
+import { playChime, unlockChime } from "../lib/chime";
 import QrLinkModal from "../components/QrLinkModal";
 
 const VIP_VYSIELACE = ["01", "02", "03", "04"];
@@ -113,7 +114,9 @@ export default function Kasa() {
   const [showHistory, setShowHistory] = useState(false);
   const [showQr, setShowQr] = useState(false);
   const [logZaznamy, setLogZaznamy] = useState([]);
+  const [logSession, setLogSession] = useState("");
   const [prevzateMap, setPrevzateMap] = useState({});
+  const [prevzateSession, setPrevzateSession] = useState("");
   const [rieseneMap, setRieseneMap] = useState({});
   const [now, setNow] = useState(Date.now());
   const [zaplatene, setZaplatene] = useState(0);
@@ -128,6 +131,8 @@ export default function Kasa() {
   const mamAktivnyLock = useRef(false);
   const skipAutoUnlockOnce = useRef(false);
   const pravyPanelRef = useRef(null);
+  const primedSession = useRef("");
+  const seenReady = useRef(new Set());
 
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 1000);
@@ -174,21 +179,25 @@ export default function Kasa() {
   }, [session]);
 
   useEffect(() => {
-    if (!session) return;
+    setLogSession("");
+    if (!session) return undefined;
     const off = onValue(ref(db, `sessions/${session}/log`), (s) => {
       const val = s.val() || {};
       const arr = Object.entries(val)
         .map(([id, rec]) => ({ id, ...rec }))
         .sort((a, b) => (b.completedAt || b.createdAt || 0) - (a.completedAt || a.createdAt || 0));
       setLogZaznamy(arr);
+      setLogSession(session);
     });
     return () => off();
   }, [session]);
 
   useEffect(() => {
-    if (!session) return;
+    setPrevzateSession("");
+    if (!session) return undefined;
     const off = onValue(ref(db, `sessions/${session}/prevzate`), (s) => {
       setPrevzateMap(s.val() || {});
+      setPrevzateSession(session);
     });
     return () => off();
   }, [session]);
@@ -692,6 +701,29 @@ export default function Kasa() {
   }
 
   const nevydane = logZaznamy.filter((z) => !prevzateMap[z.id]);
+  const nevydaneKey = nevydane.map((z) => z.id).join("\n");
+  const listsReady = Boolean(session) && logSession === session && prevzateSession === session;
+
+  useEffect(() => {
+    function onPointer() { unlockChime(); }
+    document.addEventListener("pointerdown", onPointer);
+    return () => document.removeEventListener("pointerdown", onPointer);
+  }, []);
+
+  useEffect(() => {
+    if (!listsReady) return;
+    const ids = nevydaneKey ? nevydaneKey.split("\n") : [];
+    if (primedSession.current !== session) {
+      primedSession.current = session;
+      seenReady.current = new Set(ids);
+      return;
+    }
+    const fresh = ids.filter((id) => id && !seenReady.current.has(id));
+    seenReady.current = new Set(ids);
+    fresh.forEach((_, i) => {
+      window.setTimeout(() => playChime({ loud: true }), i * 320);
+    });
+  }, [listsReady, session, nevydaneKey]);
 
   if (!session) return null;
 

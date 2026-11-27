@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, Fragment } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, Fragment } from "react";
 import { db } from "../firebase";
 import { ref, set, onValue, remove, update } from "firebase/database";
 import { translateSkToEn } from "../lib/translate";
@@ -53,6 +53,7 @@ export default function Presety() {
   const [novaPriloha, setNovaPriloha] = useState({ nazov: "", cena: "" });
   const [pickerOpenFor, setPickerOpenFor] = useState(null);
   const [prekladam, setPrekladam] = useState(false);
+  const autoStamp = useRef("");
 
   useEffect(() => {
     const off = onValue(ref(db, "presets"), (snap) => setPresety(snap.val() || {}));
@@ -321,7 +322,7 @@ export default function Presety() {
     }
   }
 
-  async function prelozitChybajuce() {
+  const prelozitChybajuce = useCallback(async ({ quiet = false } = {}) => {
     const jobs = [];
     polozky.forEach((item) => {
       if (!trimText(item.en || "")) {
@@ -346,11 +347,27 @@ export default function Presety() {
       });
       if (Object.keys(updates).length) await update(ref(db), updates);
     } catch {
-      alert("Preklad sa nepodaril. Anglický názov doplň ručne.");
+      if (!quiet) alert("Preklad sa nepodaril. Anglický názov doplň ručne.");
     } finally {
       setPrekladam(false);
     }
-  }
+  }, [polozky, vybranyPreset]);
+
+  useEffect(() => {
+    if (!vybranyPreset || prekladam) return;
+    const missing = [];
+    polozky.forEach((item) => {
+      if (!trimText(item.en || "")) missing.push(item.nazov);
+      item.prilohy.forEach((side) => {
+        if (!trimText(side.en || "")) missing.push(`${item.nazov}/${side.nazov}`);
+      });
+    });
+    if (!missing.length) return;
+    const stamp = `${vybranyPreset}:${missing.join("|")}`;
+    if (autoStamp.current === stamp) return;
+    autoStamp.current = stamp;
+    prelozitChybajuce({ quiet: true });
+  }, [vybranyPreset, polozky, prekladam, prelozitChybajuce]);
 
   function toggleExpand(nazov) {
     setExpandedItem((prev) => (prev === nazov ? null : nazov));
@@ -571,7 +588,7 @@ export default function Presety() {
                 <h2 className="k-title" style={{ margin: 0 }}>
                   Preset: <code>{vybranyPreset}</code>
                 </h2>
-                <button className="k-btn" disabled={prekladam || polozky.length === 0} onClick={prelozitChybajuce}>
+                <button className="k-btn" disabled={prekladam || polozky.length === 0} onClick={() => prelozitChybajuce()}>
                   {prekladam ? "Prekladám…" : "Preložiť chýbajúce"}
                 </button>
               </div>
